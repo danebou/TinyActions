@@ -152,8 +152,6 @@ class TinyVirat(Dataset):
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = np.roll(frame, stab_shift, (0, 1))
             frames.append(frame)
-            cv2.imshow("d",  cv2.resize(frame, (512, 512), cv2.INTER_CUBIC))
-            cv2.waitKey(50)
             i += 1
         vidcap.release()
         assert len(frames) == frame_count
@@ -204,23 +202,23 @@ class TinyVirat(Dataset):
             clips = clips[:NUM_CLIPS,:,:,:,:]
         return clips, label #clips: nc x ch x t x H x W
 
-if __name__ == '__main__':
-    shuffle = True
-    batch_size = 1
+# if __name__ == '__main__':
+#     shuffle = True
+#     batch_size = 1
 
-    dataset = 'TinyVirat-d'
-    cfg = build_config(dataset)
+#     dataset = 'TinyVirat-d'
+#     cfg = build_config(dataset)
 
-    data_generator = TinyVirat(cfg, 'train', 1.0, num_frames=4, skip_frames=2, input_size=128)
-    dataloader = DataLoader(data_generator, batch_size, shuffle=shuffle, num_workers=0)
+#     data_generator = TinyVirat(cfg, 'train', 1.0, num_frames=4, skip_frames=2, input_size=128)
+#     dataloader = DataLoader(data_generator, batch_size, shuffle=shuffle, num_workers=0)
 
-    start = time.time()
-    for epoch in range(0, 1):
-        for i, (clips, labels) in enumerate(tqdm(dataloader)):
-            clips = clips.data.numpy()
-            labels = labels.data.numpy()
-            print(clips.shape)
-            print(labels.shape)
-            if i==10:
-                break
-    print("time taken : ", time.time() - start)
+#     start = time.time()
+#     for epoch in range(0, 1):
+#         for i, (clips, labels) in enumerate(tqdm(dataloader)):
+#             clips = clips.data.numpy()
+#             labels = labels.data.numpy()
+#             print(clips.shape)
+#             print(labels.shape)
+#             if i==10:
+#                 break
+#     print("time taken : ", time.time() - start)
