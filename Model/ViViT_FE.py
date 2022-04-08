@@ -25,7 +25,7 @@ class ViViT_FE(nn.Module):
         """    ##########hybrid_backbone=None, representation_size=None,
         Args:
             in_chans (int): number of input channels, RGB videos have 3 chanels
-            spatial_embed_dim (int): spatial patch embedding dimension 
+            spatial_embed_dim (int): spatial patch embedding dimension
             sdepth (int): depth of spatial transformer
             tdepth(int):depth of temporal transformer
             num_heads (int): number of attention heads
@@ -42,7 +42,7 @@ class ViViT_FE(nn.Module):
         """
         super().__init__()
 
-        norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6) 
+        norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
         temporal_embed_dim = spatial_embed_dim   #### one temporal token embedding dimension is equal to one spatial patch embedding dim
         print("Spatial embed dimension",spatial_embed_dim)
         print("Temporal embed dim:", temporal_embed_dim)
@@ -61,7 +61,7 @@ class ViViT_FE(nn.Module):
         self.Spatial_pos_embed = nn.Parameter(torch.zeros(1, num_spat_tokens+1, spatial_embed_dim)) #num joints + 1 for cls token
         self.spatial_cls_token= nn.Parameter(torch.zeros(1,1,spatial_embed_dim)) #spatial cls token patch embed
         self.spat_op = spat_op
-        
+
         num_temp_tokens=vid_dim[-1] // tt
         self.Temporal_pos_embed = nn.Parameter(torch.zeros(1, num_temp_tokens+1, temporal_embed_dim)) #additional pos embedding zero for class token
         self.temporal_cls_token = nn.Parameter(torch.zeros(1, 1, temporal_embed_dim)) #temporal class token patch embed - this token is used for final classification!
@@ -104,10 +104,10 @@ class ViViT_FE(nn.Module):
         _,Se,h,w,_ = x.shape
         x = torch.reshape(x,(b*nc,-1,Se)) #batch x num_spatial_tokens(s) x spat_embed_dim
         _,s,_ = x.shape
-        
+
         class_token=torch.tile(self.spatial_cls_token,(b*nc,1,1)) #(B*nc,1,1)
         x = torch.cat((x,class_token),dim=1) #(B*nc,s+1,spatial_embed)
-        x += self.Spatial_pos_embed 
+        x += self.Spatial_pos_embed
         x = self.pos_drop(x)
 
         #Pass through transformer blocks
@@ -131,7 +131,6 @@ class ViViT_FE(nn.Module):
             return x #b x nc x Se
 
     def Temporal_forward_features(self, x):
-        
         b  = x.shape[0]
         class_token=torch.tile(self.temporal_cls_token,(b,1,1)) #(B,1,temp_embed_dim)
         x = torch.cat((x,class_token),dim=1) #(B,F+1,temp_embed_dim)
@@ -153,12 +152,12 @@ class ViViT_FE(nn.Module):
         #Input x: batch x num_clips x num_chans x img_height x img_width x tubelet_time
         #nc should be T/tt
         b , nc, ch, H, W, t = x.shape
-        
+
         #Reshape input to pass through Conv3D patch embedding
         x = self.Spatial_forward_features(x,self.spat_op) # b x nc x Se
         x = self.Temporal_forward_features(x)
         x = self.class_head(x)
-        return x #F.log_softmax(x,dim=1) 
+        return x #F.log_softmax(x,dim=1)
 
 '''
 model=ViViT_FE()

@@ -70,6 +70,7 @@ class TinyVirat(Dataset):
         else:
             annotations = json.load(open(cfg.test_annotations, 'r'))
         self.data_folder = os.path.join(cfg.data_folder, data_split)
+        self.stabilize_folder = os.path.join(cfg.stabilize_folder, data_split)
         self.annotations  = {}
         for annotation in annotations:
             if annotation['dim'][0] < num_frames:
@@ -133,18 +134,27 @@ class TinyVirat(Dataset):
         return frames
 
     def load_all_frames(self, video_path):
+        stabilize_path = video_path.replace(self.data_folder, self.stabilize_folder).replace('.mp4', '.json')
+        with open(stabilize_path, 'r') as f:
+            stabilize = json.load(f)
         vidcap = cv2.VideoCapture(video_path)
         frame_count = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(vidcap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(vidcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         ret = True
         frames = []
+        i = 0
         while ret:
             ret, frame = vidcap.read()
             if not ret:
                 break
+            stab_shift = (stabilize['x'][i], stabilize['y'][i])
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = np.roll(frame, stab_shift, (0, 1))
             frames.append(frame)
+            cv2.imshow("d",  cv2.resize(frame, (512, 512), cv2.INTER_CUBIC))
+            cv2.waitKey(50)
+            i += 1
         vidcap.release()
         assert len(frames) == frame_count
         frames = torch.from_numpy(np.stack(frames))
@@ -161,12 +171,12 @@ class TinyVirat(Dataset):
             frames = frames[:len(frames) - (len(frames) % self.num_frames)]
         clips = torch.stack([self.transform(x) for x in chunks(frames, self.num_frames)])
         return clips
-    
+
     def __getitem__(self, index):
         video_id = self.video_ids[index]
         video_path = os.path.join(self.data_folder, self.annotations[video_id]['path'])
         video_len = self.annotations[video_id]['length']
-        
+
         if self.data_split == 'test':
             video_labels = []
         else:
@@ -175,10 +185,10 @@ class TinyVirat(Dataset):
             clips = self.build_consecutive_clips(video_path)
         else:
             clips = self.build_consecutive_clips(video_path)
-            
+
             if self.data_split == 'test':
                 return clips, [self.annotations[video_id]]
-                
+
         label = np.zeros(self.num_classes)
         for _class in video_labels:
             label[self.class_labels.index(_class)] = 1
@@ -194,7 +204,6 @@ class TinyVirat(Dataset):
             clips = clips[:NUM_CLIPS,:,:,:,:]
         return clips, label #clips: nc x ch x t x H x W
 
-'''
 if __name__ == '__main__':
     shuffle = True
     batch_size = 1
@@ -215,4 +224,3 @@ if __name__ == '__main__':
             if i==10:
                 break
     print("time taken : ", time.time() - start)
-'''

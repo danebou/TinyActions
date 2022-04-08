@@ -31,7 +31,7 @@ torch.backends.cudnn.benchmark = True
 
 #Data parameters
 tubelet_dim=(3,TUBELET_TIME,4,4) #(ch,tt,th,tw)
-num_classes=26  
+num_classes=26
 img_res = 128
 vid_dim=(img_res,img_res,VIDEO_LENGTH) #one sample dimension - (H,W,T)
 
@@ -129,7 +129,7 @@ for epoch in range(max_epochs):
         cnt += len(targets) #number of samples
         scheduler.step()
 
-    loss /= cnt; 
+    loss /= cnt;
     accuracy /= (batch_idx+1)
     print(f"Epoch: {epoch}, Train accuracy: {accuracy:6.2f} %, Train loss: {loss:8.5f}")
     epoch_loss_train.append(loss)
@@ -159,7 +159,7 @@ for epoch in range(max_epochs):
     epoch_loss_val.append(loss)
     epoch_acc_val.append(accuracy)
     torch.save(model,exp+"_Last_epoch.pt")
-    
+
     epoch_loss_val.append(loss)
     epoch_acc_val.append(accuracy)
     torch.save(model,exp+"_Last_epoch.pt")
