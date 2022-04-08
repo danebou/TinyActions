@@ -12,7 +12,7 @@ import time
 
 
 VIDEO_LENGTH = 52  #num of frames in every video
-TUBELET_TIME = 4
+TUBELET_TIME = 1
 NUM_CLIPS = VIDEO_LENGTH // TUBELET_TIME
 
 def resize(frames, size, interpolation='bilinear'):
@@ -167,6 +167,8 @@ class TinyVirat(Dataset):
         video_path = os.path.join(self.data_folder, self.annotations[video_id]['path'])
         video_len = self.annotations[video_id]['length']
         
+        frame_pos = np.zeros([NUM_CLIPS, 3, self.num_frames, 2])
+        
         if self.data_split == 'test':
             video_labels = []
         else:
@@ -177,7 +179,7 @@ class TinyVirat(Dataset):
             clips = self.build_consecutive_clips(video_path)
             
             if self.data_split == 'test':
-                return clips, [self.annotations[video_id]]
+                return clips, [self.annotations[video_id]], frame_pos
                 
         label = np.zeros(self.num_classes)
         for _class in video_labels:
@@ -192,7 +194,8 @@ class TinyVirat(Dataset):
             clips = torch.cat((clips,rem_clips),dim=0)
         elif clips.shape[0] > NUM_CLIPS:
             clips = clips[:NUM_CLIPS,:,:,:,:]
-        return clips, label #clips: nc x ch x t x H x W
+
+        return clips, label, frame_pos #clips: nc x ch x t x H x W
 
 '''
 if __name__ == '__main__':

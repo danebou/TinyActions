@@ -55,8 +55,8 @@ class ViViT_FE(nn.Module):
         self.tubelet_dim=tubelet_dim
 
         ### spatial patch embedding
-        self.Spatial_patch_to_embedding = nn.Conv3d(c, spatial_embed_dim, self.tubelet_dim[1:],
-                                        stride=self.tubelet_dim[1:],padding='valid',dilation=1)
+        self.Spatial_patch_to_embedding = nn.Conv2d(c, spatial_embed_dim, self.tubelet_dim[2:],
+                                        stride=self.tubelet_dim[2:],padding='valid',dilation=1)
         num_spat_tokens = (vid_dim[0]//th) * (vid_dim[1]//tw)
         self.Spatial_pos_embed = nn.Parameter(torch.zeros(1, num_spat_tokens+1, spatial_embed_dim)) #num joints + 1 for cls token
         self.spatial_cls_token= nn.Parameter(torch.zeros(1,1,spatial_embed_dim)) #spatial cls token patch embed
@@ -98,10 +98,11 @@ class ViViT_FE(nn.Module):
         #Input shape: batch x num_clips x H x W x (tube tempo dim * 3)
         b,nc,ch,H,W,t = x.shape
         x = rearrange(x, 'b nc ch H W t  -> (b nc) ch H W t', ) #for spatial transformer, batch size if b*f
+        x = x.squeeze(4)
         x = self.Spatial_patch_to_embedding(x) #all input spatial tokens, op: (b nc) x H/h x W/w x Se
 
         #Reshape input to pass through encoder blocks
-        _,Se,h,w,_ = x.shape
+        _,Se,h,w = x.shape
         x = torch.reshape(x,(b*nc,-1,Se)) #batch x num_spatial_tokens(s) x spat_embed_dim
         _,s,_ = x.shape
         
@@ -148,7 +149,9 @@ class ViViT_FE(nn.Module):
         x = x.view(b, -1) # (Batch_size, class_embedding_size)
         return x
 
-    def forward(self, x):
+    def forward(self, x, img_pos):
+        # img_pos: batch x num_clips x tube_dim_time 
+
         x = x.permute(0,1,2,4,5,3)
         #Input x: batch x num_clips x num_chans x img_height x img_width x tubelet_time
         #nc should be T/tt

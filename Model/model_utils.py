@@ -9,6 +9,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+def positionalencoding2d(shape, pos):
+    """
+    :param d_model: dimension of the model
+    :param height: height of the positions
+    :param width: width of the positions
+    :return: d_model*height*width position matrix
+    """
+    if d_model % 4 != 0:
+        raise ValueError("Cannot use sin/cos positional encoding with "
+                         "odd dimension (got dim={:d})".format(d_model))
+    pe = torch.zeros(shape)
+    # Each dimension use half of d_model
+    d_model = int(shape[2] / 2)
+    div_term = torch.exp(torch.arange(0., d_model, 2) *
+                         -(math.log(10000.0) / d_model))
+    pos_w = pos_w.unsqueeze(1)
+    pos_h = pos_h.unsqueeze(1)
+    pe[0:d_model:2] = torch.sin(pos[0] * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
+    pe[1:d_model:2] = torch.cos(pos[0] * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
+    pe[d_model::2] = torch.sin(pos[1] * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
+    pe[d_model + 1::2] = torch.cos(pos[1] * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
+
+    return pe
+
 #Multi Layer Perceptron
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
