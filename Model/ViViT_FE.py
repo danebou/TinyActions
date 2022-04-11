@@ -19,8 +19,8 @@ nb = T/tt #number of blocks or tubelets with unique temporal index
 
 
 class ViViT_FE(nn.Module):
-    def __init__(self, spatial_embed_dim=32, sdepth=4, tdepth=4, vid_dim=(128,128,100),
-                 num_heads=8, mlp_ratio=2., qkv_bias=True, qk_scale=None, spat_op='cls', tubelet_dim=(3,4,4,4),
+    def __init__(self, spatial_embed_dim=32, sdepth=4, tdepth=4, idepth=8, vid_dim=(128,128,100),
+                 num_heads=8, mlp_ratio=2., qkv_bias=True, qk_scale=None, spat_op='cls', tubelet_dim=(3,4,4,4), num_img_tublets=4,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,  norm_layer=None, num_classes=26):
         """    ##########hybrid_backbone=None, representation_size=None,
         Args:
@@ -53,6 +53,8 @@ class ViViT_FE(nn.Module):
 
         c,tt,th,tw=tubelet_dim
         self.tubelet_dim=tubelet_dim
+        self.num_img_tublets = num_img_tublets
+        num_temp_spat_tokens = vid_dim[-1] // tt
 
         ### spatial patch embedding
         self.Spatial_patch_to_embedding = nn.Conv3d(c, spatial_embed_dim, self.tubelet_dim[1:],
@@ -62,12 +64,20 @@ class ViViT_FE(nn.Module):
         self.spatial_cls_token= nn.Parameter(torch.zeros(1,1,spatial_embed_dim)) #spatial cls token patch embed
         self.spat_op = spat_op
 
-        num_temp_tokens=vid_dim[-1] // tt
+        ### Image Spatial patch embedding
+        self.image_indices = torch.tensor([round(i * (num_temp_spat_tokens-1) / (num_img_tublets - 1)) for i in range(num_img_tublets)])
+        self.Image_Spatial_patch_to_embedding = nn.Conv3d(3, spatial_embed_dim, self.tubelet_dim[1:],
+                                        stride=self.tubelet_dim[1:],padding='valid',dilation=1)
+        self.Image_Spatial_pos_embed = nn.Parameter(torch.zeros(1, num_spat_tokens+1, spatial_embed_dim)) #num joints + 1 for cls token
+        self.image_spatial_cls_token= nn.Parameter(torch.zeros(1,1,spatial_embed_dim)) #spatial cls token patch embed
+
+        num_temp_tokens=num_temp_spat_tokens + num_img_tublets
         self.Temporal_pos_embed = nn.Parameter(torch.zeros(1, num_temp_tokens+1, temporal_embed_dim)) #additional pos embedding zero for class token
         self.temporal_cls_token = nn.Parameter(torch.zeros(1, 1, temporal_embed_dim)) #temporal class token patch embed - this token is used for final classification!
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         sdpr = [x.item() for x in torch.linspace(0, drop_path_rate, sdepth)]  # stochastic depth decay rule
+        idpr = [x.item() for x in torch.linspace(0, drop_path_rate, idepth)]  # stochastic depth decay rule
         tdpr = [x.item() for x in torch.linspace(0, drop_path_rate, tdepth)]  # stochastic depth decay rule
 
         self.Spatial_blocks = nn.ModuleList([
@@ -76,12 +86,19 @@ class ViViT_FE(nn.Module):
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=sdpr[i], norm_layer=norm_layer)
             for i in range(sdepth)])
 
+        self.Image_Spatial_blocks = nn.ModuleList([
+            Block(
+                dim=spatial_embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=idpr[i], norm_layer=norm_layer)
+            for i in range(idepth)])
+
         self.blocks = nn.ModuleList([
             Block(
                 dim=temporal_embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=tdpr[i], norm_layer=norm_layer)
             for i in range(tdepth)])
 
+        self.Image_Spatial_norm = norm_layer(spatial_embed_dim)
         self.Spatial_norm = norm_layer(spatial_embed_dim)
         self.Temporal_norm = norm_layer(temporal_embed_dim)
 
@@ -91,6 +108,43 @@ class ViViT_FE(nn.Module):
             nn.Linear(temporal_embed_dim, num_classes)
         )
 
+    def Image_Spatial_forward_features(self, x, spat_op='cls'):
+        #spat_op: 'cls' output is CLS token, otherwise global average pool of attention encoded spatial features
+
+        #Input shape: batch x num_clips x H x W x (tube tempo dim * 3)
+        b,nc,ch,H,W,t = x.shape
+        x = rearrange(x, 'b nc ch H W t  -> (b nc) ch H W t', ) #for spatial transformer, batch size if b*f
+        x = self.Image_Spatial_patch_to_embedding(x) #all input spatial tokens, op: (b nc) x H/h x W/w x Se
+
+        #Reshape input to pass through encoder blocks
+        _,Se,h,w,_ = x.shape
+        x = torch.reshape(x,(b*nc,-1,Se)) #batch x num_spatial_tokens(s) x spat_embed_dim
+        _,s,_ = x.shape
+
+        class_token=torch.tile(self.image_spatial_cls_token,(b*nc,1,1)) #(B*nc,1,1)
+        x = torch.cat((x,class_token),dim=1) #(B*nc,s+1,spatial_embed)
+        x += self.Image_Spatial_pos_embed
+        x = self.pos_drop(x)
+
+        #Pass through transformer blocks
+        for blk in self.Image_Spatial_blocks:
+            x = blk(x)
+
+        x = self.Image_Spatial_norm(x)
+
+        ###Extract Class token head from the output
+        cls_token = x[:,-1,:]
+        cls_token = torch.reshape(cls_token,(b,nc,Se))
+
+        #Determine the output type from Spatial transformer
+        if spat_op=='cls':
+            return cls_token #b x nc x Se
+        else:
+            x = x[:,:s,:]
+            x = rearrange(x, '(b nc) s Se -> (b nc) Se s')
+            x = F.avg_pool1d(x,x.shape[-1],stride=x.shape[-1]) #(b*nc) x Se x 1
+            x = torch.reshape(x, (b,nc,Se))
+            return x #b x nc x Se
 
     def Spatial_forward_features(self, x, spat_op='cls'):
         #spat_op: 'cls' output is CLS token, otherwise global average pool of attention encoded spatial features
@@ -150,11 +204,19 @@ class ViViT_FE(nn.Module):
     def forward(self, x):
         x = x.permute(0,1,2,4,5,3)
         #Input x: batch x num_clips x num_chans x img_height x img_width x tubelet_time
+        img_x,flow_x = x.split(3, dim=2)
         #nc should be T/tt
-        b , nc, ch, H, W, t = x.shape
+        b, nc, ch, H, W, t = flow_x.shape
+
+        img_x = torch.index_select(img_x, 1, self.image_indices)
+        img_x = torch.cat((img_x[:, 0:2, ...], img_x[:, -2:, ...]),dim=1)
 
         #Reshape input to pass through Conv3D patch embedding
-        x = self.Spatial_forward_features(x,self.spat_op) # b x nc x Se
+        img_x = self.Image_Spatial_forward_features(img_x,self.spat_op) # b x nc x Se
+        flow_x = self.Spatial_forward_features(flow_x,self.spat_op) # b x nc x Se
+
+        x = torch.cat((img_x, flow_x),dim=1) #b x nc x Se
+
         x = self.Temporal_forward_features(x)
         x = self.class_head(x)
         return x #F.log_softmax(x,dim=1)

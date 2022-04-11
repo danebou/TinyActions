@@ -30,7 +30,7 @@ device = torch.device("cuda:0" if use_cuda else "cpu")
 torch.backends.cudnn.benchmark = True
 
 #Data parameters
-tubelet_dim=(3,TUBELET_TIME,4,4) #(ch,tt,th,tw)
+tubelet_dim=(2,TUBELET_TIME,4,4) #(ch,tt,th,tw)
 num_classes=26
 img_res = 128
 vid_dim=(img_res,img_res,VIDEO_LENGTH) #one sample dimension - (H,W,T)
@@ -112,7 +112,6 @@ if __name__ == '__main__':
             predictions = model(inputs.float()); #targets = torch.tensor(targets,dtype=torch.long); predictions = torch.tensor(predictions,dtype=torch.long)
 
             batch_loss = criterion(predictions, targets)
-
 
             # compute gradients of this batch.
             (batch_loss / gradient_accumulations).backward()
