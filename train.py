@@ -88,89 +88,91 @@ epoch_loss_val=[]
 epoch_acc_train=[]
 epoch_acc_val=[]
 
-#Label smoothing
-#smoothing=0.1
-#criterion = LabelSmoothingCrossEntropy(smoothing=smoothing)
-best_accuracy = 0.
-print("Begin Training....")
-for epoch in range(max_epochs):
-    # Train
-    model.train()
-    loss = 0.
-    accuracy = 0.
-    cnt = 0.
-    for batch_idx, (inputs, targets) in enumerate(tqdm(training_generator)):
-        inputs = inputs.to(device)
-        #print("Targets shape : ",targets.shape)
-        targets = targets.to(device)
+if __name__ == '__main__':
 
-        optimizer.zero_grad()
+    #Label smoothing
+    #smoothing=0.1
+    #criterion = LabelSmoothingCrossEntropy(smoothing=smoothing)
+    best_accuracy = 0.
+    print("Begin Training....")
+    for epoch in range(max_epochs):
+        # Train
+        model.train()
+        loss = 0.
+        accuracy = 0.
+        cnt = 0.
+        for batch_idx, (inputs, targets) in enumerate(tqdm(training_generator)):
+            inputs = inputs.to(device)
+            #print("Targets shape : ",targets.shape)
+            targets = targets.to(device)
 
-        # Ascent Step
-        predictions = model(inputs.float()); #targets = torch.tensor(targets,dtype=torch.long); predictions = torch.tensor(predictions,dtype=torch.long)
+            optimizer.zero_grad()
 
-        batch_loss = criterion(predictions, targets)
+            # Ascent Step
+            predictions = model(inputs.float()); #targets = torch.tensor(targets,dtype=torch.long); predictions = torch.tensor(predictions,dtype=torch.long)
+
+            batch_loss = criterion(predictions, targets)
 
 
-         # compute gradients of this batch.
-        (batch_loss / gradient_accumulations).backward()
-        # so each parameter holds its gradient value now,
-        # and when we run `loss.backward()` again in next batch iteration,
-        # then the previous gradient computed and the current one will be added.
-        # this is the default behaviour of gradients in pytorch.
+            # compute gradients of this batch.
+            (batch_loss / gradient_accumulations).backward()
+            # so each parameter holds its gradient value now,
+            # and when we run `loss.backward()` again in next batch iteration,
+            # then the previous gradient computed and the current one will be added.
+            # this is the default behaviour of gradients in pytorch.
 
-        if (batch_idx + 1) % gradient_accumulations == 0:
-            optimizer.step()
-            model.zero_grad()
+            if (batch_idx + 1) % gradient_accumulations == 0:
+                optimizer.step()
+                model.zero_grad()
 
-        with torch.no_grad():
-            loss += batch_loss.sum().item()
-            accuracy +=  compute_accuracy(predictions,targets,inf_threshold)
-        cnt += len(targets) #number of samples
+            with torch.no_grad():
+                loss += batch_loss.sum().item()
+                accuracy +=  compute_accuracy(predictions,targets,inf_threshold)
+            cnt += len(targets) #number of samples
+            scheduler.step()
+
+        loss /= cnt;
+        accuracy /= (batch_idx+1)
+        print(f"Epoch: {epoch}, Train accuracy: {accuracy:6.2f} %, Train loss: {loss:8.5f}")
+        epoch_loss_train.append(loss)
+        epoch_acc_train.append(accuracy)
         scheduler.step()
 
-    loss /= cnt;
-    accuracy /= (batch_idx+1)
-    print(f"Epoch: {epoch}, Train accuracy: {accuracy:6.2f} %, Train loss: {loss:8.5f}")
-    epoch_loss_train.append(loss)
-    epoch_acc_train.append(accuracy)
-    scheduler.step()
+        #Test
+        model.eval()
+        loss = 0.
+        accuracy = 0.
+        cnt = 0.
+        with torch.no_grad():
+            for batch_idx, (inputs, targets) in enumerate(validation_generator):
+                inputs = inputs.cuda()
+                targets = targets.cuda()
+                predictions = model(inputs.float())
+                loss += criterion(predictions, targets).sum().item()
+                accuracy += compute_accuracy(predictions,targets,inf_threshold)
+                cnt += len(targets)
+            loss /= cnt
+            accuracy /= (batch_idx+1)
 
-    #Test
-    model.eval()
-    loss = 0.
-    accuracy = 0.
-    cnt = 0.
-    with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(validation_generator):
-            inputs = inputs.cuda()
-            targets = targets.cuda()
-            predictions = model(inputs.float())
-            loss += criterion(predictions, targets).sum().item()
-            accuracy += compute_accuracy(predictions,targets,inf_threshold)
-            cnt += len(targets)
-        loss /= cnt
-        accuracy /= (batch_idx+1)
+        if best_accuracy < accuracy:
+            best_accuracy = accuracy
 
-    if best_accuracy < accuracy:
-       best_accuracy = accuracy
+        print(f"Epoch: {epoch}, Test accuracy:  {accuracy:6.2f} %, Test loss:  {loss:8.5f}")
+        epoch_loss_val.append(loss)
+        epoch_acc_val.append(accuracy)
+        torch.save(model,exp+"_Last_epoch.pt")
 
-    print(f"Epoch: {epoch}, Test accuracy:  {accuracy:6.2f} %, Test loss:  {loss:8.5f}")
-    epoch_loss_val.append(loss)
-    epoch_acc_val.append(accuracy)
-    torch.save(model,exp+"_Last_epoch.pt")
-
-    epoch_loss_val.append(loss)
-    epoch_acc_val.append(accuracy)
-    torch.save(model,exp+"_Last_epoch.pt")
+        epoch_loss_val.append(loss)
+        epoch_acc_val.append(accuracy)
+        torch.save(model,exp+"_Last_epoch.pt")
 
 
-print(f"Best test accuracy: {best_accuracy}")
-print("TRAINING COMPLETED :)")
+    print(f"Best test accuracy: {best_accuracy}")
+    print("TRAINING COMPLETED :)")
 
-#Save visualization
-get_plot(epoch_acc_train,epoch_acc_val,'Accuracy-'+exp,'Train Accuracy','Val Accuracy','Epochs','Acc')
-get_plot(epoch_loss_train,epoch_loss_val,'Loss-'+exp,'Train Loss','Val Loss','Epochs','Loss')
+    #Save visualization
+    get_plot(epoch_acc_train,epoch_acc_val,'Accuracy-'+exp,'Train Accuracy','Val Accuracy','Epochs','Acc')
+    get_plot(epoch_loss_train,epoch_loss_val,'Loss-'+exp,'Train Loss','Val Loss','Epochs','Loss')
 
-#Save trained model
-torch.save(model,exp+"_ckpt.pt")
+    #Save trained model
+    torch.save(model,exp+"_ckpt.pt")
