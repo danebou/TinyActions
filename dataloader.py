@@ -215,40 +215,40 @@ class TinyVirat(Dataset):
             clips = clips[:NUM_CLIPS,:,:,:,:]
         return clips, label #clips: nc x ch x t x H x W
 
-if __name__ == '__main__':
-    shuffle = True
-    batch_size = 1
+# if __name__ == '__main__':
+#     shuffle = True
+#     batch_size = 1
 
-    dataset = 'TinyVirat-d'
-    cfg = build_config(dataset)
+#     dataset = 'TinyVirat-d'
+#     cfg = build_config(dataset)
 
-    data_generator = TinyVirat(cfg, 'train', 1.0, num_frames=4, skip_frames=2, input_size=128)
-    dataloader = DataLoader(data_generator, batch_size, shuffle=shuffle, num_workers=0)
+#     data_generator = TinyVirat(cfg, 'train', 1.0, num_frames=4, skip_frames=2, input_size=128)
+#     dataloader = DataLoader(data_generator, batch_size, shuffle=shuffle, num_workers=0)
 
-    start = time.time()
-    tublet_count = 0
-    tublet_take = 0
-    for epoch in range(0, 1):
-        for i, (clips, labels) in enumerate(tqdm(dataloader)):
-            clips = clips.data.numpy()
-            labels = labels.data.numpy()
+#     start = time.time()
+#     tublet_count = 0
+#     tublet_take = 0
+#     for epoch in range(0, 1):
+#         for i, (clips, labels) in enumerate(tqdm(dataloader)):
+#             clips = clips.data.numpy()
+#             labels = labels.data.numpy()
 
-            if len(clips.shape) != 6:
-                print('Fail')
-                exit()
-
-
-
-            # for j in range(clips.shape[0]):
-            #     for l1 in np.split(clips[j], [k for k in range(4, 128, 4)], axis=4):
-            #         for l2 in np.split(l1, [k for k in range(4, 128, 4)], axis=3):
-            #             for k in range(l2.shape[0]):
-            #                 tublet = l2[k, 4, ...]
-            #                 tublet_count += 1
-            #                 if np.any(tublet > -2.2):
-            #                     tublet_take += 1
-            #print(f'Tublet Take = {tublet_take / tublet_count}')
+#             if len(clips.shape) != 6:
+#                 print('Fail')
+#                 exit()
 
 
 
-    print("time taken : ", time.time() - start)
+#             # for j in range(clips.shape[0]):
+#             #     for l1 in np.split(clips[j], [k for k in range(4, 128, 4)], axis=4):
+#             #         for l2 in np.split(l1, [k for k in range(4, 128, 4)], axis=3):
+#             #             for k in range(l2.shape[0]):
+#             #                 tublet = l2[k, 4, ...]
+#             #                 tublet_count += 1
+#             #                 if np.any(tublet > -2.2):
+#             #                     tublet_take += 1
+#             #print(f'Tublet Take = {tublet_take / tublet_count}')
+
+
+
+#     print("time taken : ", time.time() - start)

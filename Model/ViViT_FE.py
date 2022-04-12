@@ -19,7 +19,7 @@ nb = T/tt #number of blocks or tubelets with unique temporal index
 
 
 class ViViT_FE(nn.Module):
-    def __init__(self, spatial_embed_dim=32, sdepth=4, tdepth=4, idepth=8, vid_dim=(128,128,100),
+    def __init__(self, spatial_embed_dim=32, sdepth=4, tdepth=4, idepth=4, vid_dim=(128,128,100),
                  num_heads=8, mlp_ratio=2., qkv_bias=True, qk_scale=None, spat_op='cls', tubelet_dim=(3,4,4,4), num_img_tublets=4,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,  norm_layer=None, num_classes=26):
         """    ##########hybrid_backbone=None, representation_size=None,
