@@ -65,7 +65,7 @@ class ViViT_FE(nn.Module):
         self.spat_op = spat_op
 
         ### Image Spatial patch embedding
-        self.image_indices = torch.tensor([round(i * (num_temp_spat_tokens-1) / (num_img_tublets - 1)) for i in range(num_img_tublets)])
+        self.image_indices = torch.round(torch.arange(0, num_temp_spat_tokens, step=(num_temp_spat_tokens-1) / (num_img_tublets - 1)))
         self.Image_Spatial_patch_to_embedding = nn.Conv3d(3, spatial_embed_dim, self.tubelet_dim[1:],
                                         stride=self.tubelet_dim[1:],padding='valid',dilation=1)
         self.Image_Spatial_pos_embed = nn.Parameter(torch.zeros(1, num_spat_tokens+1, spatial_embed_dim)) #num joints + 1 for cls token
@@ -207,9 +207,8 @@ class ViViT_FE(nn.Module):
         img_x,flow_x = x.split(3, dim=2)
         #nc should be T/tt
         b, nc, ch, H, W, t = flow_x.shape
-
-        img_x = torch.index_select(img_x, 1, self.image_indices)
-        img_x = torch.cat((img_x[:, 0:2, ...], img_x[:, -2:, ...]),dim=1)
+        #img_x = torch.index_select(img_x, 1, self.image_indices)
+        img_x = torch.cat((img_x[:, 0:1, ...], img_x[:, 4:5, ...], img_x[:, 8:9, ...], img_x[:, 12:13, ...]),dim=1)
 
         #Reshape input to pass through Conv3D patch embedding
         img_x = self.Image_Spatial_forward_features(img_x,self.spat_op) # b x nc x Se

@@ -7,7 +7,7 @@ def build_config(dataset):
         cfg.val_annotations = path + '/tiny_val_v2.json'
         cfg.test_annotations = path + '/tiny_test_v2_public.json'
         cfg.class_map = path + '/class_map.json'
-        cfg.flow_folder = path + '/optical_flow'
+        cfg.flow_folder = path + '/optical_flow_noise_reduce'
         cfg.num_classes = 26
     # elif dataset == 'TinyVirat-d':
     #     cfg.data_folder = 'datasets/TinyVIRAT-v2/videos'
