@@ -14,7 +14,7 @@ import time
 
 VIDEO_LENGTH = 52  #num of frames in every video
 TUBELET_TIME = 4
-NUM_CLIPS = VIDEO_LENGTH // TUBELET_TIME
+NUM_CLIPS = VIDEO_LENGTH
 
 def resize(frames, size, interpolation='bilinear'):
     scale = None
@@ -71,7 +71,7 @@ class TinyVirat(Dataset):
         else:
             annotations = json.load(open(cfg.test_annotations, 'r'))
         self.data_folder = os.path.join(cfg.data_folder, data_split)
-        self.flow_folder = os.path.join(cfg.flow_folder, data_split)
+        #self.flow_folder = os.path.join(cfg.flow_folder, data_split)
         self.annotations  = {}
         for annotation in annotations:
             if annotation['dim'][0] < num_frames:
@@ -95,7 +95,8 @@ class TinyVirat(Dataset):
         self.skip_frames = skip_frames
         self.input_size = input_size
         self.resize = Resize((self.input_size, self.input_size))
-        self.normalize = Normalize(mean=[0.485, 0.456, 0.406, 0.5, 0.5], std=[0.229, 0.224, 0.225, 0.225, 0.225])
+        #self.normalize = Normalize(mean=[0.485, 0.456, 0.406, 0.5, 0.5], std=[0.229, 0.224, 0.225, 0.225, 0.225])
+        self.normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.transform = transforms.Compose([ToFloatTensorInZeroOne(), self.resize, self.normalize])
 
     def __len__(self):
@@ -135,38 +136,35 @@ class TinyVirat(Dataset):
         return frames
 
     def load_all_frames(self, video_path):
-        flow_path = video_path.replace(self.data_folder, self.flow_folder).replace('.mp4', '.avi')
+        #flow_path = video_path.replace(self.data_folder, self.flow_folder).replace('.mp4', '.avi')
         vidcap = cv2.VideoCapture(video_path)
-        vidcap_flow = cv2.VideoCapture(flow_path)
+        #vidcap_flow = cv2.VideoCapture(flow_path)
         frame_count = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(vidcap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(vidcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        frame_count_flow = int(vidcap_flow.get(cv2.CAP_PROP_FRAME_COUNT))
-        frame_width_flow = int(vidcap_flow.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height_flow = int(vidcap_flow.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        assert frame_count == frame_count_flow
-        assert frame_width == frame_width_flow
-        assert frame_height == frame_height_flow
+        # frame_count_flow = int(vidcap_flow.get(cv2.CAP_PROP_FRAME_COUNT))
+        # frame_width_flow = int(vidcap_flow.get(cv2.CAP_PROP_FRAME_WIDTH))
+        # frame_height_flow = int(vidcap_flow.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # assert frame_count == frame_count_flow
+        # assert frame_width == frame_width_flow
+        # assert frame_height == frame_height_flow
         ret = True
         frames = []
         i = 0
         while ret:
             ret, frame = vidcap.read()
-            ret_flow, frame_flow = vidcap_flow.read()
-            assert ret_flow == ret
+            #ret_flow, frame_flow = vidcap_flow.read()
+            #assert ret_flow == ret
             if not ret:
                 break
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_flow = cv2.cvtColor(frame_flow, cv2.COLOR_BGR2HSV)
-            # mag1 = frame_flow[..., 2:3]
-            # mag1 = np.where(mag1 > 10, mag1, 0)
-            # frame_flow[..., 2:3] = mag1
-            frame_all_channels = np.concatenate((frame, frame_flow[..., 0:1], frame_flow[..., 2:3]), axis=2)
-            frames.append(frame_all_channels)
-            i += 1
+            #frame_flow = cv2.cvtColor(frame_flow, cv2.COLOR_BGR2HSV)
+            #frame_all_channels = np.concatenate((frame, frame_flow[..., 0:1], frame_flow[..., 2:3]), axis=2)
+            frames.append(frame)
+            #i += 1
 
         vidcap.release()
-        vidcap_flow.release()
+        #vidcap_flow.release()
         assert len(frames) == frame_count
         frames = torch.from_numpy(np.stack(frames))
         return frames
@@ -180,8 +178,9 @@ class TinyVirat(Dataset):
         frames = self.load_all_frames(video_path)
         if len(frames) % self.num_frames != 0:
             frames = frames[:len(frames) - (len(frames) % self.num_frames)]
-        clips = torch.stack([self.transform(x) for x in chunks(frames, self.num_frames)])
-        return clips
+        #clips = torch.stack([self.transform(x) for x in chunks(frames, self.num_frames)])
+        clips = self.transform(frames)
+        return clips.permute(1, 2, 3, 0)
 
     def __getitem__(self, index):
         video_id = self.video_ids[index]
@@ -205,14 +204,14 @@ class TinyVirat(Dataset):
             label[self.class_labels.index(_class)] = 1
         #Make sure sample has NUM_CLIPS clips
         if clips.shape[0] < NUM_CLIPS:
-            last_clip = clips[-1,:,:,:,:]
+            last_clip = clips[-1,:,:,:]
             last_clip = last_clip.cpu().detach().numpy()
             diff = NUM_CLIPS - clips.shape[0]
-            rem_clips = np.tile(last_clip,(diff,1,1,1,1))
+            rem_clips = np.tile(last_clip,(diff,1,1,1))
             rem_clips = torch.from_numpy(rem_clips)
             clips = torch.cat((clips,rem_clips),dim=0)
         elif clips.shape[0] > NUM_CLIPS:
-            clips = clips[:NUM_CLIPS,:,:,:,:]
+            clips = clips[:NUM_CLIPS,:,:,:]
         return clips, label #clips: nc x ch x t x H x W
 
 # if __name__ == '__main__':
@@ -233,7 +232,7 @@ class TinyVirat(Dataset):
 #             clips = clips.data.numpy()
 #             labels = labels.data.numpy()
 
-#             if len(clips.shape) != 6:
+#             if len(clips.shape) != 5:
 #                 print('Fail')
 #                 exit()
 

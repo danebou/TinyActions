@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from Model.ViViT_FE import ViViT_FE
+from Model.ResNet2D import ResNet2D
 from configuration import build_config
 from dataloader import TinyVirat, VIDEO_LENGTH, TUBELET_TIME, NUM_CLIPS
 
@@ -30,10 +30,10 @@ device = torch.device("cuda:0" if use_cuda else "cpu")
 torch.backends.cudnn.benchmark = True
 
 #Data parameters
-tubelet_dim=(2,TUBELET_TIME,4,4) #(ch,tt,th,tw)
+tubelet_dim=(3,TUBELET_TIME,4,4) #(ch,tt,th,tw)
 num_classes=26
 img_res = 128
-vid_dim=(img_res,img_res,VIDEO_LENGTH) #one sample dimension - (H,W,T)
+vid_dim=(img_res,img_res,VIDEO_LENGTH,3) #one sample dimension - (H,W,T)
 
 
 # Training Parameters
@@ -41,7 +41,7 @@ shuffle = True
 print("Creating params....")
 params = {'batch_size':2,
           'shuffle': shuffle,
-          'num_workers': 4}
+          'num_workers': 2}
 max_epochs = 250
 gradient_accumulations = 1
 inf_threshold = 0.7
@@ -62,8 +62,9 @@ print("Initiating Model...")
 
 spat_op='cls' #or GAP
 
-#model=ViViT_FE(vid_dim=vid_dim,num_classes=num_classes,tubelet_dim=tubelet_dim,spat_op=spat_op)
-model = torch.load('../drive/MyDrive/TinyActions/1_Last_epoch.pt')
+model=ResNet2D(vid_dim=vid_dim,num_classes=num_classes)
+checkpoint = torch.load('drive/MyDrive/TinyActions/1_Last_epoch.pt')
+model.load_state_dict(checkpoint['model_state_dict'])
 model=model.to(device)
 
 #Define loss and optimizer
@@ -71,6 +72,7 @@ lr=0.01
 wt_decay=5e-4
 criterion=torch.nn.BCEWithLogitsLoss() #CrossEntropyLoss()
 optimizer=torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9,weight_decay=wt_decay)
+optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 #optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wt_decay)
 
 '''
@@ -82,6 +84,7 @@ minimizer = ASAM(optimizer, model, rho=rho, eta=eta)
 
 # Learning Rate Scheduler
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, max_epochs)
+scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
 #TRAINING AND VALIDATING
 epoch_loss_train=[]
@@ -89,13 +92,15 @@ epoch_loss_val=[]
 epoch_acc_train=[]
 epoch_acc_val=[]
 
+#score = []
+score = checkpoint['score']
+
 #Label smoothing
 #smoothing=0.1
 #criterion = LabelSmoothingCrossEntropy(smoothing=smoothing)
 best_accuracy = 0.
 print("Begin Training....")
-start_i = 1
-for epoch in range(1, max_epochs):
+for epoch in range(checkpoint['epoch'], max_epochs):
     # Train
     model.train()
     loss = 0.
@@ -159,7 +164,15 @@ for epoch in range(1, max_epochs):
     print(f"Epoch: {epoch}, Test accuracy:  {accuracy:6.2f} %, Test loss:  {loss:8.5f}")
     epoch_loss_val.append(loss)
     epoch_acc_val.append(accuracy)
-    torch.save(model,'../drive/MyDrive/TinyActions/' + exp+"_Last_epoch.pt")
+
+    score.append((loss, accuracy))
+    torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'score': score,
+    }, 'drive/MyDrive/TinyActions/' + exp+"_Last_epoch.pt")
 
 
 print(f"Best test accuracy: {best_accuracy}")
