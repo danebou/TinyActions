@@ -15,7 +15,7 @@ T = video time
 
 
 class ResNet2D(nn.Module):
-    def __init__(self, vid_dim=(128,128,100,3), temporal_dialation=2, temporal_kernal_size=16, norm_layer=None, num_classes=26):
+    def __init__(self, vid_dim=(128,128,100,3), temporal_dialation=1, temporal_kernal_size=32, norm_layer=None, num_classes=26):
         """    ##########hybrid_backbone=None, representation_size=None,
         Args:
             in_chans (int): number of input channels, RGB videos have 3 chanels
@@ -43,9 +43,10 @@ class ResNet2D(nn.Module):
         H,W,T,c = vid_dim
         self.t_size = T - temporal_dialation * (temporal_kernal_size - 1)
 
-        self.temporal_conv = torch.nn.Conv1d(c, c, kernel_size=temporal_kernal_size, dilation=temporal_dialation, groups=c)
+        self.pos_emb = nn.Parameter(torch.zeros((1, H, W, c, self.t_size))) #num joints + 1 for cls token
+        self.temporal_conv = torch.nn.Conv1d(c, c, kernel_size=temporal_kernal_size, dilation=temporal_dialation)
 
-        self.res_net = ResNet(Bottleneck, [3, 4, 6, 3], num_classes=num_classes)
+        self.res_net = ResNet(Bottleneck, [2, 2, 2, 2], num_classes=num_classes)
 
         #Classification head
         self.class_head = nn.Linear(num_classes*self.t_size, self.num_classes)
@@ -58,7 +59,9 @@ class ResNet2D(nn.Module):
         x = rearrange(x, 'b T H W c  -> (b H W) c T')
         x = self.temporal_conv(x)
 
-        x = rearrange(x, '(b H W) c t -> (b t) c H W', b=b, H=H, W=W, t=self.t_size)
+        x = rearrange(x, '(b H W) c t -> b H W c t', b=b, H=H, W=W, t=self.t_size)
+        x += self.pos_emb
+        x = rearrange(x, 'b H W c t -> (b t) c H W')
         x = self.res_net(x)
 
         x = rearrange(x, '(b t) cls -> b (t cls)', b=b, t=self.t_size)
