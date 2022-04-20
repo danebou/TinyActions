@@ -1,4 +1,5 @@
 from functools import partial
+from tkinter import X
 from einops import rearrange, repeat
 import numpy as np
 import torch
@@ -55,6 +56,7 @@ class ViViT_FE(nn.Module):
         self.tubelet_dim=tubelet_dim
         self.num_img_tublets = num_img_tublets
         num_temp_spat_tokens = vid_dim[-1] // tt
+        self.tokens_per_patch=16
 
         ### spatial patch embedding
         self.Spatial_patch_to_embedding = nn.Conv3d(c, spatial_embed_dim, self.tubelet_dim[1:],
@@ -66,6 +68,7 @@ class ViViT_FE(nn.Module):
 
         ### Image Spatial patch embedding
         self.image_indices = torch.round(torch.arange(0, num_temp_spat_tokens, step=(num_temp_spat_tokens-1) / (num_img_tublets - 1)))
+        self.image_patches = torch.nn.Unfold(tubelet_dim, stride=tubelet_dim)
         self.Image_Spatial_patch_to_embedding = nn.Conv3d(3, spatial_embed_dim, self.tubelet_dim[1:],
                                         stride=self.tubelet_dim[1:],padding='valid',dilation=1)
         self.Image_Spatial_pos_embed = nn.Parameter(torch.zeros(1, num_spat_tokens+1, spatial_embed_dim)) #num joints + 1 for cls token
@@ -152,37 +155,46 @@ class ViViT_FE(nn.Module):
         #Input shape: batch x num_clips x H x W x (tube tempo dim * 3)
         b,nc,ch,H,W,t = x.shape
         x = rearrange(x, 'b nc ch H W t  -> (b nc) ch H W t', ) #for spatial transformer, batch size if b*f
-        x = self.Spatial_patch_to_embedding(x) #all input spatial tokens, op: (b nc) x H/h x W/w x Se
 
-        #Reshape input to pass through encoder blocks
-        _,Se,h,w,_ = x.shape
-        x = torch.reshape(x,(b*nc,-1,Se)) #batch x num_spatial_tokens(s) x spat_embed_dim
-        _,s,_ = x.shape
+        # Make patches
+        patches = x.view(4, 3, 3, 3).permute(0, 2, 1, 3).reshape(1, 12, 9)
+        patches_nonzero_indices = torch.nonzero(torch.sum(patches, dim=[0, 1, ] ))
+        _,_,Se,h,w,_ = patches.shape
 
-        class_token=torch.tile(self.spatial_cls_token,(b*nc,1,1)) #(B*nc,1,1)
-        x = torch.cat((x,class_token),dim=1) #(B*nc,s+1,spatial_embed)
-        x += self.Spatial_pos_embed
-        x = self.pos_drop(x)
+        patch_output = torch.zeros(b,nc,Se)
 
-        #Pass through transformer blocks
-        for blk in self.Spatial_blocks:
-            x = blk(x)
+        for p in patches:
+            x = self.Spatial_patch_to_embedding(x) #all input spatial tokens, op: (b nc) x H/h x W/w x Se
 
-        x = self.Spatial_norm(x)
+            #Reshape input to pass through encoder blocks
 
-        ###Extract Class token head from the output
-        cls_token = x[:,-1,:]
-        cls_token = torch.reshape(cls_token,(b,nc,Se))
+            x = torch.reshape(x,(b*nc,-1,Se)) #batch x num_spatial_tokens(s) x spat_embed_dim
+            _,s,_ = x.shape
 
-        #Determine the output type from Spatial transformer
-        if spat_op=='cls':
-            return cls_token #b x nc x Se
-        else:
-            x = x[:,:s,:]
-            x = rearrange(x, '(b nc) s Se -> (b nc) Se s')
-            x = F.avg_pool1d(x,x.shape[-1],stride=x.shape[-1]) #(b*nc) x Se x 1
-            x = torch.reshape(x, (b,nc,Se))
-            return x #b x nc x Se
+            class_token=torch.tile(self.spatial_cls_token,(b*nc,1,1)) #(B*nc,1,1)
+            x = torch.cat((x,class_token),dim=1) #(B*nc,s+1,spatial_embed)
+            x += self.Spatial_pos_embed
+            x = self.pos_drop(x)
+
+            #Pass through transformer blocks
+            for blk in self.Spatial_blocks:
+                x = blk(x)
+
+            x = self.Spatial_norm(x)
+
+            ###Extract Class token head from the output
+            cls_token = x[:,-1,:]
+            cls_token = torch.reshape(cls_token,(b,nc,Se))
+
+            #Determine the output type from Spatial transformer
+            if spat_op=='cls':
+                return cls_token #b x nc x Se
+            else:
+                x = x[:,:s,:]
+                x = rearrange(x, '(b nc) s Se -> (b nc) Se s')
+                x = F.avg_pool1d(x,x.shape[-1],stride=x.shape[-1]) #(b*nc) x Se x 1
+                x = torch.reshape(x, (b,nc,Se))
+                return x #b x nc x Se
 
     def Temporal_forward_features(self, x):
         b  = x.shape[0]
