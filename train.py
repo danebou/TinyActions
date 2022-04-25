@@ -1,8 +1,9 @@
 import torch
 import numpy as np
 from Model.ViViT_FE import ViViT_FE
+from Model.ViViT_Pose import ViViT_Pose
 from configuration import build_config
-from dataloader import TinyVirat, VIDEO_LENGTH, TUBELET_TIME, NUM_CLIPS
+from dataloader import TinyVirat, VIDEO_LENGTH, TUBELET_TIME, NUM_CLIPS, POSE_POINT_COUNT, POSE_POINT_SIZE
 
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
@@ -24,10 +25,13 @@ device = torch.device("cuda:0" if use_cuda else "cpu")
 torch.backends.cudnn.benchmark = True
 
 #Data parameters
+max_pose_objects = 4
 tubelet_dim=(3,TUBELET_TIME,4,4) #(ch,tt,th,tw)
+pose_tubelet_dim=(POSE_POINT_SIZE,TUBELET_TIME)
 num_classes=26
 img_res = 128
 vid_dim=(img_res,img_res,VIDEO_LENGTH) #one sample dimension - (H,W,T)
+pose_vid_dim=(POSE_POINT_COUNT,max_pose_objects,VIDEO_LENGTH) #one sample dimension - (H,W,T)
 
 
 # Training Parameters
@@ -42,10 +46,10 @@ inf_threshold = 0.7
 #Data Generators
 cfg = build_config('TinyVirat')
 
-train_dataset = TinyVirat(cfg, 'train', 1.0, num_frames=tubelet_dim[1], skip_frames=2, input_size=img_res)
+train_dataset = TinyVirat(cfg, 'train', 1.0, num_frames=tubelet_dim[1], skip_frames=2, input_size=img_res, max_pose_objects=max_pose_objects)
 training_generator = DataLoader(train_dataset,**params)
 
-val_dataset = TinyVirat(cfg, 'val', 1.0, num_frames=tubelet_dim[1], skip_frames=2, input_size=img_res)
+val_dataset = TinyVirat(cfg, 'val', 1.0, num_frames=tubelet_dim[1], skip_frames=2, input_size=img_res, max_pose_objects=max_pose_objects)
 validation_generator = DataLoader(val_dataset, **params)
 
 #Define model
@@ -63,7 +67,8 @@ else:
 
 spat_op='cls' #or GAP
 
-model=ViViT_FE(vid_dim=vid_dim,num_classes=num_classes,tubelet_dim=tubelet_dim,spat_op=spat_op)
+#model=ViViT_FE(vid_dim=vid_dim,num_classes=num_classes,tubelet_dim=tubelet_dim,spat_op=spat_op)
+model=ViViT_Pose(vid_dim=pose_vid_dim,num_classes=num_classes,tubelet_dim=pose_tubelet_dim,spat_op=spat_op)
 if checkpoint: model.load_state_dict(checkpoint['model_state_dict'])
 
 model=model.to(device)
@@ -118,7 +123,7 @@ if __name__ == '__main__':
             optimizer.zero_grad()
 
             # Ascent Step
-            predictions = model(inputs.float()); #targets = torch.tensor(targets,dtype=torch.long); predictions = torch.tensor(predictions,dtype=torch.long)
+            predictions = model(pose_inputs.float()); #targets = torch.tensor(targets,dtype=torch.long); predictions = torch.tensor(predictions,dtype=torch.long)
 
             batch_loss = criterion(predictions, targets)
 
@@ -151,9 +156,9 @@ if __name__ == '__main__':
         cnt = 0.
         with torch.no_grad():
             for batch_idx, (inputs, pose_inputs, targets) in enumerate(validation_generator):
-                inputs = inputs.cuda()
-                targets = targets.cuda()
-                predictions = model(inputs.float())
+                inputs = inputs.to(device)
+                targets = targets.to(device)
+                predictions = model(pose_inputs.float())
                 loss += criterion(predictions, targets).sum().item()
                 accuracy += compute_accuracy(predictions,targets,inf_threshold)
                 cnt += len(targets)

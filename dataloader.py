@@ -9,9 +9,11 @@ import random
 import numpy as np
 from configuration import build_config
 from tqdm import tqdm
+from einops import rearrange
 import time
 
-
+POSE_POINT_COUNT = 20 # 17 feature points + 2 box corners + 1 score
+POSE_POINT_SIZE = 3
 VIDEO_LENGTH = 52  #num of frames in every video
 TUBELET_TIME = 4
 NUM_CLIPS = VIDEO_LENGTH // TUBELET_TIME
@@ -38,19 +40,24 @@ class ToFloatTensorInZeroOne(object):
         return to_normalized_float_tensor(vid)
 
 def pose_permute(pose):
-    return pose.permute(2, 0, 1)
+    return rearrange(pose, 't np pp pc -> (pc pp) t np')
 
 class PosePermute(object):
     def __call__(self, pose):
         return pose_permute(pose)
 
+def pose_reshape(pose):
+    return rearrange(pose, '(pc pp) t np -> pc np t pp', pc=3)
+
+class PoseReshape(object):
+    def __call__(self, pose):
+        return pose_reshape(pose)
 
 def normalize(vid, mean, std):
     shape = (-1,) + (1,) * (vid.dim() - 1)
     mean = torch.as_tensor(mean).reshape(shape)
     std = torch.as_tensor(std).reshape(shape)
     return (vid - mean) / std
-
 class Normalize(object):
     def __init__(self, mean, std):
         self.mean = mean
@@ -67,7 +74,7 @@ def chunks(lst, n):
 
 
 class TinyVirat(Dataset):
-    def __init__(self, cfg, data_split, data_percentage, num_frames, skip_frames, input_size, max_pose_objects=5, shuffle=False):
+    def __init__(self, cfg, data_split, data_percentage, num_frames, skip_frames, input_size, max_pose_objects, shuffle=False):
         self.data_split = data_split
         self.num_classes = cfg.num_classes
         self.class_labels = [k for k, v in sorted(json.load(open(cfg.class_map, 'r')).items(), key=lambda item: item[1])]
@@ -106,14 +113,10 @@ class TinyVirat(Dataset):
         self.normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.transform = transforms.Compose([ToFloatTensorInZeroOne(), self.resize, self.normalize])
 
-        self.pose_data_len = 56
-        self.pose_width_indices = [i*3 + 0 for i in range(17)] + [51, 53]
-        self.pose_height_indices = [i*3 + 1 for i in range(17)]  + [52, 54]
-
-        normalize_mean = [0.5] * 55 + [1.83]
-        normalize_std = [1] * 55 + [0.51]
+        normalize_mean = [0, 0, 0] * 19 + [0, 0, 1.83]
+        normalize_std = [1, 1, 1] * 19 + [1, 1, 0.51]
         pose_normalize = Normalize(mean=normalize_mean, std=normalize_std)
-        self.pose_transform = transforms.Compose([PosePermute(), pose_normalize])
+        self.pose_transform = transforms.Compose([PosePermute(), pose_normalize, PoseReshape()])
         self.max_pose_objects = max_pose_objects
 
     def __len__(self):
@@ -153,9 +156,10 @@ class TinyVirat(Dataset):
         return frames
 
     def load_all_pose_data(self, video_path, image_size, frame_count):
-        pose_input = np.zeros((frame_count, self.max_pose_objects, (17 * 3 + 4 + 1)), dtype=np.float32) # 17 features * 3 per feature + 4 box + 1 score
+        pose_input = np.zeros((frame_count, self.max_pose_objects, POSE_POINT_COUNT, POSE_POINT_SIZE), dtype=np.float32) # 17 features * 3 per feature + 4 box + 1 score
 
-        with open('03727.json', 'r') as f:
+        pose_path = video_path.replace(self.data_folder, self.pose_folder).replace('.mp4', '.json')
+        with open(pose_path, 'r') as f:
             pose_json = json.load(f)
 
         if len(pose_json) == 0:
@@ -175,19 +179,19 @@ class TinyVirat(Dataset):
 
         for frame_id,pose in pose_data.items():
             for pose_id in range(len(pose)):
-                pose_input[frame_id, pose_id, 0:51] = pose[pose_id]['keypoints']
-                pose_input[frame_id, pose_id, 51:55] = pose[pose_id]['box']
-                pose_input[frame_id, pose_id, 55] = pose[pose_id]['score']
+                box1 = pose[pose_id]['box'][0:2] + [0]
+                box2 = pose[pose_id]['box'][2:4] + [0]
+                score = [0, 0] + [pose[pose_id]['score']]
+                pose_input[frame_id, pose_id, 0:17, :] = list(chunks(pose[pose_id]['keypoints'], 3))
+                pose_input[frame_id, pose_id, 17:20] = [box1, box2, score]
             pass
-
-        # Get normalization factor
-        img_scale_norm = np.full((pose_input.shape[2]), 1.0, dtype=np.float32)
-        img_scale_norm[self.pose_width_indices] = 1.0 / image_size[0]
-        img_scale_norm[self.pose_height_indices] = 1.0 / image_size[1]
 
         # Normalize by Image Width and Flatten
         pose_tensor = torch.from_numpy(pose_input)
-        pose_tensor *= torch.from_numpy(img_scale_norm)
+        pose_tensor[:,:,:,0] -= image_size[0] / 2
+        pose_tensor[:,:,:,0] /= image_size[0] / 2
+        pose_tensor[:,:,:,1] -= image_size[1] / 2
+        pose_tensor[:,:,:,1] /= image_size[1] / 2
 
         return pose_tensor
 
@@ -265,21 +269,21 @@ class TinyVirat(Dataset):
             label[self.class_labels.index(_class)] = 1
         #Make sure sample has NUM_CLIPS clips
         if clips.shape[0] < NUM_CLIPS:
-            last_clip = clips[-1,:,:,:,:]
+            last_clip = clips[-1,...]
             last_clip = last_clip.cpu().detach().numpy()
             diff = NUM_CLIPS - clips.shape[0]
             rem_clips = np.tile(last_clip,(diff,1,1,1,1))
             rem_clips = torch.from_numpy(rem_clips)
             clips = torch.cat((clips,rem_clips),dim=0)
 
-            last_pose_clip = pose_clips[-1,:,:,:]
+            last_pose_clip = pose_clips[-1,...]
             last_pose_clip = last_pose_clip.cpu().detach().numpy()
-            rem_pose_clips = np.tile(last_pose_clip,(diff,1,1,1))
+            rem_pose_clips = np.tile(last_pose_clip,(diff,1,1,1,1))
             rem_pose_clips = torch.from_numpy(rem_pose_clips)
             pose_clips = torch.cat((pose_clips,rem_pose_clips),dim=0)
         elif clips.shape[0] > NUM_CLIPS:
-            clips = clips[:NUM_CLIPS,:,:,:,:]
-            pose_clips = pose_clips[:NUM_CLIPS,:,:,:]
+            clips = clips[:NUM_CLIPS,...]
+            pose_clips = pose_clips[:NUM_CLIPS,...]
         return clips, pose_clips, label #clips: nc x ch x t x H x W
 
 if __name__ == '__main__':
@@ -289,7 +293,7 @@ if __name__ == '__main__':
     dataset = 'TinyVirat-d'
     cfg = build_config(dataset)
 
-    data_generator = TinyVirat(cfg, 'train', 1.0, num_frames=4, skip_frames=2, input_size=128)
+    data_generator = TinyVirat(cfg, 'train', 1.0, num_frames=4, skip_frames=2, input_size=128, max_pose_objects=5)
     dataloader = DataLoader(data_generator, batch_size, shuffle=shuffle, num_workers=0)
 
     start = time.time()
