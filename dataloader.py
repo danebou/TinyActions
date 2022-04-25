@@ -97,7 +97,7 @@ class TinyVirat(Dataset):
         self.resize = Resize((self.input_size, self.input_size))
         self.normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.transform = transforms.Compose([ToFloatTensorInZeroOne(), self.resize, self.normalize])
-        
+
         self.pose_transform = transforms.Compose([ToFloatTensorInZeroOne(), self.resize, self.normalize])
         self.max_pose_objects = max_pose_objects
 
@@ -137,10 +137,10 @@ class TinyVirat(Dataset):
         frames = torch.from_numpy(np.stack(frames))
         return frames
 
-    def load_all_pose_data(self, video_path, frame_count):
-        pose_input = np.zeros((frame_count, self.max_pose_objects, (17 * 3 + 4 + 1)), dtype=float) # 17 features * 3 per feature + 4 box + 1 score
+    def load_all_pose_data(self, video_path, image_size, frame_count):
+        pose_input = np.zeros((frame_count, self.max_pose_objects, (17 * 3 + 4 + 1)), dtype=np.float32) # 17 features * 3 per feature + 4 box + 1 score
 
-        with open('03727.json', 'r') as f:
+        with open('01788.json', 'r') as f:
             pose_json = json.load(f)
 
         if len(pose_json) == 0:
@@ -164,9 +164,18 @@ class TinyVirat(Dataset):
                 pose_input[frame_id, pose_id, 55] = pose[pose_id]['score']
             pass
 
-        # Flatten
+        width_indices = [i*3 + 0 for i in range(17)] + [51, 53]
+        height_indices = [i*3 + 1 for i in range(17)]  + [52, 54]
+
+        # Get normalization factor
+        img_scale_norm = np.full((pose_input.shape[2]), 1.0, dtype=np.float32)
+        img_scale_norm[width_indices] = 1.0 / image_size[0]
+        img_scale_norm[height_indices] = 1.0 / image_size[1]
+
+        # Normalize by Image Width and Flatten
         pose_tensor = torch.from_numpy(pose_input)
-        pose_tensor = torch.reshape(pose_input, (frame_count, -1))
+        pose_tensor *= torch.from_numpy(img_scale_norm)
+        pose_tensor = torch.reshape(pose_tensor, (frame_count, -1))
         return pose_tensor
 
     def load_all_frames(self, video_path):
@@ -213,7 +222,7 @@ class TinyVirat(Dataset):
 
     def build_consecutive_clips(self, video_path):
         frames = self.load_all_frames(video_path)
-        pose_data = self.load_all_pose_data(video_path, frames.shape[0])
+        pose_data = self.load_all_pose_data(video_path, frames.shape[1:3], frames.shape[0])
         if len(frames) % self.num_frames != 0:
             frames = frames[:len(frames) - (len(frames) % self.num_frames)]
             pose_data = pose_data[:len(frames) - (len(frames) % self.num_frames)]
@@ -231,12 +240,12 @@ class TinyVirat(Dataset):
         else:
             video_labels = self.annotations[video_id]['label']
         if self.data_split == 'train':
-            clips = self.build_consecutive_clips(video_path)
+            clips, pose_clips = self.build_consecutive_clips(video_path)
         else:
-            clips = self.build_consecutive_clips(video_path)
+            clips, pose_clips = self.build_consecutive_clips(video_path)
 
             if self.data_split == 'test':
-                return clips, [self.annotations[video_id]]
+                return clips, pose_clips, [self.annotations[video_id]]
 
         label = np.zeros(self.num_classes)
         for _class in video_labels:
@@ -249,9 +258,16 @@ class TinyVirat(Dataset):
             rem_clips = np.tile(last_clip,(diff,1,1,1,1))
             rem_clips = torch.from_numpy(rem_clips)
             clips = torch.cat((clips,rem_clips),dim=0)
+
+            last_pose_clip = pose_clips[-1,:,:]
+            last_pose_clip = last_pose_clip.cpu().detach().numpy()
+            rem_pose_clips = np.tile(last_pose_clip,(diff,1,1))
+            rem_pose_clips = torch.from_numpy(rem_pose_clips)
+            pose_clips = torch.cat((pose_clips,rem_pose_clips),dim=0)
         elif clips.shape[0] > NUM_CLIPS:
             clips = clips[:NUM_CLIPS,:,:,:,:]
-        return clips, label #clips: nc x ch x t x H x W
+            pose_clips = pose_clips[:NUM_CLIPS,:,:]
+        return clips, pose_clips, label #clips: nc x ch x t x H x W
 
 if __name__ == '__main__':
     shuffle = True
