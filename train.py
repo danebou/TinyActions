@@ -1,14 +1,94 @@
 import torch
 import numpy as np
-from Model.ResNet2D import ResNet2D
+from Model.ViViT_FE import ViViT_FE
 from configuration import build_config
 from dataloader import TinyVirat, VIDEO_LENGTH, TUBELET_TIME, NUM_CLIPS
 
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from utils.visualize import get_plot
 from sklearn.metrics import accuracy_score
-exp='1'
+import re
+import os
+
+exp='2'
+
+#Make exp dir
+exp_path = os.path.join('exps', f'exp_{exp}')
+os.makedirs(exp_path, exist_ok=True)
+
+#CUDA for PyTorch
+print("Using CUDA....")
+
+use_cuda = torch.cuda.is_available()
+device = torch.device("cuda:0" if use_cuda else "cpu")
+torch.backends.cudnn.benchmark = True
+
+#Data parameters
+tubelet_dim=(3,TUBELET_TIME,4,4) #(ch,tt,th,tw)
+num_classes=26
+img_res = 128
+vid_dim=(img_res,img_res,VIDEO_LENGTH) #one sample dimension - (H,W,T)
+
+
+# Training Parameters
+print("Creating params....")
+params = {'batch_size':2,
+          'shuffle': True,
+          'num_workers': 0}
+max_epochs = 250
+gradient_accumulations = 1
+inf_threshold = 0.7
+
+#Data Generators
+cfg = build_config('TinyVirat')
+
+train_dataset = TinyVirat(cfg, 'train', 1.0, num_frames=tubelet_dim[1], skip_frames=2, input_size=img_res)
+training_generator = DataLoader(train_dataset,**params)
+
+val_dataset = TinyVirat(cfg, 'val', 1.0, num_frames=tubelet_dim[1], skip_frames=2, input_size=img_res)
+validation_generator = DataLoader(val_dataset, **params)
+
+#Define model
+print("Initiating Model...")
+checkpoint_path_base = os.path.join(exp_path, 'checkpoints')
+os.makedirs(checkpoint_path_base, exist_ok=True)
+top_checkpoints = sorted([f.name for f in os.scandir(checkpoint_path_base)], key=lambda x: int(re.match(r'epoch_([0-9]+)', x)[1]), reverse=True)
+checkpoint_path = os.path.join(checkpoint_path_base, top_checkpoints[0]) if len(top_checkpoints) > 0 else None
+if checkpoint_path:
+    checkpoint = torch.load(checkpoint_path)
+    epoch = checkpoint['epoch']
+    print(f'Checkpoint from Epoch {epoch} Loaded')
+else:
+    checkpoint = None
+
+spat_op='cls' #or GAP
+
+model=ViViT_FE(vid_dim=vid_dim,num_classes=num_classes,tubelet_dim=tubelet_dim,spat_op=spat_op)
+if checkpoint: model.load_state_dict(checkpoint['model_state_dict'])
+
+model=model.to(device)
+
+#Define loss and optimizer
+lr=0.01
+wt_decay=5e-4
+criterion=torch.nn.BCEWithLogitsLoss() #CrossEntropyLoss()
+optimizer=torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9,weight_decay=wt_decay)
+if checkpoint: optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+#optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wt_decay)
+
+'''
+#ASAM
+rho=0.5
+eta=0.01
+minimizer = ASAM(optimizer, model, rho=rho, eta=eta)
+'''
+
+# Learning Rate Scheduler
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, max_epochs)
+if checkpoint: scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+
+start_epoch = checkpoint['epoch'] + 1 if checkpoint else 0
+score = checkpoint['score'] if checkpoint else []
 
 def compute_accuracy(pred,target,inf_th):
     pred = pred
@@ -22,165 +102,72 @@ def compute_accuracy(pred,target,inf_th):
     #Compute equal labels
     return accuracy_score(pred,target)
 
-#CUDA for PyTorch
-print("Using CUDA....")
-
-use_cuda = torch.cuda.is_available()
-device = torch.device("cuda:0" if use_cuda else "cpu")
-torch.backends.cudnn.benchmark = True
-
-#Data parameters
-tubelet_dim=(3,TUBELET_TIME,4,4) #(ch,tt,th,tw)
-num_classes=26
-img_res = 128
-vid_dim=(img_res,img_res,VIDEO_LENGTH,3) #one sample dimension - (H,W,T)
-
-
-# Training Parameters
-shuffle = True
-print("Creating params....")
-params = {'batch_size':2,
-          'shuffle': shuffle,
-          'num_workers': 2}
-max_epochs = 250
-gradient_accumulations = 1
-inf_threshold = 0.7
-
-#Data Generators
-dataset = 'TinyVirat'
-cfg = build_config(dataset)
-skip_frames=2
-
-train_dataset = TinyVirat(cfg, 'train', 1.0, num_frames=tubelet_dim[1], skip_frames=2, input_size=img_res)
-training_generator = DataLoader(train_dataset,**params)
-
-val_dataset = TinyVirat(cfg, 'val', 1.0, num_frames=tubelet_dim[1], skip_frames=2, input_size=img_res)
-validation_generator = DataLoader(val_dataset, **params)
-
-#Define model
-print("Initiating Model...")
-
-spat_op='cls' #or GAP
-
-model=ResNet2D(vid_dim=vid_dim,num_classes=num_classes)
-checkpoint = torch.load('drive/MyDrive/TinyActions/1_Last_epoch.pt')
-model.load_state_dict(checkpoint['model_state_dict'])
-model=model.to(device)
-
-#Define loss and optimizer
-lr=0.01
-wt_decay=5e-4
-criterion=torch.nn.BCEWithLogitsLoss() #CrossEntropyLoss()
-optimizer=torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9,weight_decay=wt_decay)
-optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-#optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wt_decay)
-
-'''
-#ASAM
-rho=0.5
-eta=0.01
-minimizer = ASAM(optimizer, model, rho=rho, eta=eta)
-'''
-
-# Learning Rate Scheduler
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, max_epochs)
-scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-
 #TRAINING AND VALIDATING
-epoch_loss_train=[]
-epoch_loss_val=[]
-epoch_acc_train=[]
-epoch_acc_val=[]
+if __name__ == '__main__':
+    for epoch in range(start_epoch, max_epochs):
+        # Train
+        model.train()
+        loss = 0.
+        accuracy = 0.
+        cnt = 0.
+        for batch_idx, (inputs, targets) in enumerate(tqdm(training_generator)):
+            inputs = inputs.to(device)
+            #print("Targets shape : ",targets.shape)
+            targets = targets.to(device)
 
-#score = []
-score = checkpoint['score']
+            optimizer.zero_grad()
 
-#Label smoothing
-#smoothing=0.1
-#criterion = LabelSmoothingCrossEntropy(smoothing=smoothing)
-best_accuracy = 0.
-print("Begin Training....")
-for epoch in range(checkpoint['epoch'], max_epochs):
-    # Train
-    model.train()
-    loss = 0.
-    accuracy = 0.
-    cnt = 0.
-    for batch_idx, (inputs, targets) in enumerate(tqdm(training_generator)):
-        inputs = inputs.to(device)
-        #print("Targets shape : ",targets.shape)
-        targets = targets.to(device)
+            # Ascent Step
+            predictions = model(inputs.float()); #targets = torch.tensor(targets,dtype=torch.long); predictions = torch.tensor(predictions,dtype=torch.long)
 
-        optimizer.zero_grad()
+            batch_loss = criterion(predictions, targets)
 
-        # Ascent Step
-        predictions = model(inputs.float()); #targets = torch.tensor(targets,dtype=torch.long); predictions = torch.tensor(predictions,dtype=torch.long)
+            # compute gradients of this batch.
+            (batch_loss / gradient_accumulations).backward()
+            # so each parameter holds its gradient value now,
+            # and when we run `loss.backward()` again in next batch iteration,
+            # then the previous gradient computed and the current one will be added.
+            # this is the default behaviour of gradients in pytorch.
 
-        batch_loss = criterion(predictions, targets)
+            if (batch_idx + 1) % gradient_accumulations == 0:
+                optimizer.step()
+                model.zero_grad()
 
-         # compute gradients of this batch.
-        (batch_loss / gradient_accumulations).backward()
-        # so each parameter holds its gradient value now,
-        # and when we run `loss.backward()` again in next batch iteration,
-        # then the previous gradient computed and the current one will be added.
-        # this is the default behaviour of gradients in pytorch.
+            with torch.no_grad():
+                loss += batch_loss.sum().item()
+                accuracy +=  compute_accuracy(predictions,targets,inf_threshold)
+            cnt += len(targets) #number of samples
+            scheduler.step()
 
-        if (batch_idx + 1) % gradient_accumulations == 0:
-            optimizer.step()
-            model.zero_grad()
-
-        with torch.no_grad():
-            loss += batch_loss.sum().item()
-            accuracy +=  compute_accuracy(predictions,targets,inf_threshold)
-        cnt += len(targets) #number of samples
+        loss /= cnt;
+        accuracy /= (batch_idx+1)
+        print(f"Epoch: {epoch}, Train accuracy: {accuracy:6.2f} %, Train loss: {loss:8.5f}")
         scheduler.step()
 
-    loss /= cnt;
-    accuracy /= (batch_idx+1)
-    print(f"Epoch: {epoch}, Train accuracy: {accuracy:6.2f} %, Train loss: {loss:8.5f}")
-    epoch_loss_train.append(loss)
-    epoch_acc_train.append(accuracy)
-    scheduler.step()
+        #Test
+        model.eval()
+        loss = 0.
+        accuracy = 0.
+        cnt = 0.
+        with torch.no_grad():
+            for batch_idx, (inputs, targets) in enumerate(validation_generator):
+                inputs = inputs.cuda()
+                targets = targets.cuda()
+                predictions = model(inputs.float())
+                loss += criterion(predictions, targets).sum().item()
+                accuracy += compute_accuracy(predictions,targets,inf_threshold)
+                cnt += len(targets)
+            loss /= cnt
+            accuracy /= (batch_idx+1)
 
-    #Test
-    model.eval()
-    loss = 0.
-    accuracy = 0.
-    cnt = 0.
-    with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(validation_generator):
-            inputs = inputs.cuda()
-            targets = targets.cuda()
-            predictions = model(inputs.float())
-            loss += criterion(predictions, targets).sum().item()
-            accuracy += compute_accuracy(predictions,targets,inf_threshold)
-            cnt += len(targets)
-        loss /= cnt
-        accuracy /= (batch_idx+1)
+        print(f"Epoch: {epoch}, Test accuracy:  {accuracy:6.2f} %, Test loss:  {loss:8.5f}")
 
-    if best_accuracy < accuracy:
-       best_accuracy = accuracy
-
-    print(f"Epoch: {epoch}, Test accuracy:  {accuracy:6.2f} %, Test loss:  {loss:8.5f}")
-    epoch_loss_val.append(loss)
-    epoch_acc_val.append(accuracy)
-
-    score.append((loss, accuracy))
-    torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'score': score,
-    }, 'drive/MyDrive/TinyActions/' + exp+"_Last_epoch.pt")
-
-
-print(f"Best test accuracy: {best_accuracy}")
-print("TRAINING COMPLETED :)")
-
-#Save visualization
-get_plot(epoch_acc_train,epoch_acc_val,'Accuracy-'+exp,'Train Accuracy','Val Accuracy','Epochs','Acc')
-get_plot(epoch_loss_train,epoch_loss_val,'Loss-'+exp,'Train Loss','Val Loss','Epochs','Loss')
-
-#Save trained model
-torch.save(model,exp+"_ckpt.pt")
+        score.append((loss, accuracy))
+        checkpoint_path = os.path.join(checkpoint_path_base, f'epoch_{epoch}.pt')
+        torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'score': score,
+        }, checkpoint_path)
