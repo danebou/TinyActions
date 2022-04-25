@@ -59,7 +59,7 @@ def chunks(lst, n):
 
 
 class TinyVirat(Dataset):
-    def __init__(self, cfg, data_split, data_percentage, num_frames, skip_frames, input_size, shuffle=False):
+    def __init__(self, cfg, data_split, data_percentage, num_frames, skip_frames, input_size, max_pose_objects=5, shuffle=False):
         self.data_split = data_split
         self.num_classes = cfg.num_classes
         self.class_labels = [k for k, v in sorted(json.load(open(cfg.class_map, 'r')).items(), key=lambda item: item[1])]
@@ -71,7 +71,7 @@ class TinyVirat(Dataset):
         else:
             annotations = json.load(open(cfg.test_annotations, 'r'))
         self.data_folder = os.path.join(cfg.data_folder, data_split)
-        self.flow_folder = os.path.join(cfg.flow_folder, data_split)
+        self.pose_folder = os.path.join(cfg.pose_folder, data_split)
         self.annotations  = {}
         for annotation in annotations:
             if annotation['dim'][0] < num_frames:
@@ -97,6 +97,9 @@ class TinyVirat(Dataset):
         self.resize = Resize((self.input_size, self.input_size))
         self.normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.transform = transforms.Compose([ToFloatTensorInZeroOne(), self.resize, self.normalize])
+        
+        self.pose_transform = transforms.Compose([ToFloatTensorInZeroOne(), self.resize, self.normalize])
+        self.max_pose_objects = max_pose_objects
 
     def __len__(self):
         return len(self.video_ids)
@@ -133,6 +136,38 @@ class TinyVirat(Dataset):
         assert len(frames) == self.num_frames
         frames = torch.from_numpy(np.stack(frames))
         return frames
+
+    def load_all_pose_data(self, video_path, frame_count):
+        pose_input = np.zeros((frame_count, self.max_pose_objects, (17 * 3 + 4 + 1)), dtype=float) # 17 features * 3 per feature + 4 box + 1 score
+
+        with open('03727.json', 'r') as f:
+            pose_json = json.load(f)
+
+        if len(pose_json) == 0:
+            return pose_input
+
+        pose_data = {}
+        for p in pose_json:
+            id = int(p['image_id'][:-len('.jpg')])
+            if not id in pose_data:
+                pose_data[id] = []
+            pose_data[id].append(p)
+
+        # Get top pose_data based on score
+        for k,v in pose_data.items():
+            pose_data[k] = sorted(v, key = lambda x: x['score'], reverse=True)[:self.max_pose_objects]
+
+        for frame_id,pose in pose_data.items():
+            for pose_id in range(len(pose)):
+                pose_input[frame_id, pose_id, 0:51] = pose[pose_id]['keypoints']
+                pose_input[frame_id, pose_id, 51:55] = pose[pose_id]['box']
+                pose_input[frame_id, pose_id, 55] = pose[pose_id]['score']
+            pass
+
+        # Flatten
+        pose_tensor = torch.from_numpy(pose_input)
+        pose_tensor = torch.reshape(pose_input, (frame_count, -1))
+        return pose_tensor
 
     def load_all_frames(self, video_path):
         #flow_path = video_path.replace(self.data_folder, self.flow_folder).replace('.mp4', '.avi')
@@ -178,10 +213,13 @@ class TinyVirat(Dataset):
 
     def build_consecutive_clips(self, video_path):
         frames = self.load_all_frames(video_path)
+        pose_data = self.load_all_pose_data(video_path, frames.shape[0])
         if len(frames) % self.num_frames != 0:
             frames = frames[:len(frames) - (len(frames) % self.num_frames)]
+            pose_data = pose_data[:len(frames) - (len(frames) % self.num_frames)]
         clips = torch.stack([self.transform(x) for x in chunks(frames, self.num_frames)])
-        return clips
+        pose_clips = torch.stack([self.transform(x) for x in chunks(pose_data, self.num_frames)])
+        return clips, pose_clips
 
     def __getitem__(self, index):
         video_id = self.video_ids[index]
@@ -215,40 +253,40 @@ class TinyVirat(Dataset):
             clips = clips[:NUM_CLIPS,:,:,:,:]
         return clips, label #clips: nc x ch x t x H x W
 
-# if __name__ == '__main__':
-#     shuffle = True
-#     batch_size = 1
+if __name__ == '__main__':
+    shuffle = True
+    batch_size = 1
 
-#     dataset = 'TinyVirat-d'
-#     cfg = build_config(dataset)
+    dataset = 'TinyVirat-d'
+    cfg = build_config(dataset)
 
-#     data_generator = TinyVirat(cfg, 'train', 1.0, num_frames=4, skip_frames=2, input_size=128)
-#     dataloader = DataLoader(data_generator, batch_size, shuffle=shuffle, num_workers=0)
+    data_generator = TinyVirat(cfg, 'train', 1.0, num_frames=4, skip_frames=2, input_size=128)
+    dataloader = DataLoader(data_generator, batch_size, shuffle=shuffle, num_workers=0)
 
-#     start = time.time()
-#     tublet_count = 0
-#     tublet_take = 0
-#     for epoch in range(0, 1):
-#         for i, (clips, labels) in enumerate(tqdm(dataloader)):
-#             clips = clips.data.numpy()
-#             labels = labels.data.numpy()
+    start = time.time()
+    tublet_count = 0
+    tublet_take = 0
+    for epoch in range(0, 1):
+        for i, (clips, labels) in enumerate(tqdm(dataloader)):
+            clips = clips.data.numpy()
+            labels = labels.data.numpy()
 
-#             if len(clips.shape) != 6:
-#                 print('Fail')
-#                 exit()
-
-
-
-#             # for j in range(clips.shape[0]):
-#             #     for l1 in np.split(clips[j], [k for k in range(4, 128, 4)], axis=4):
-#             #         for l2 in np.split(l1, [k for k in range(4, 128, 4)], axis=3):
-#             #             for k in range(l2.shape[0]):
-#             #                 tublet = l2[k, 4, ...]
-#             #                 tublet_count += 1
-#             #                 if np.any(tublet > -2.2):
-#             #                     tublet_take += 1
-#             #print(f'Tublet Take = {tublet_take / tublet_count}')
+            if len(clips.shape) != 6:
+                print('Fail')
+                exit()
 
 
 
-#     print("time taken : ", time.time() - start)
+            # for j in range(clips.shape[0]):
+            #     for l1 in np.split(clips[j], [k for k in range(4, 128, 4)], axis=4):
+            #         for l2 in np.split(l1, [k for k in range(4, 128, 4)], axis=3):
+            #             for k in range(l2.shape[0]):
+            #                 tublet = l2[k, 4, ...]
+            #                 tublet_count += 1
+            #                 if np.any(tublet > -2.2):
+            #                     tublet_take += 1
+            #print(f'Tublet Take = {tublet_take / tublet_count}')
+
+
+
+    print("time taken : ", time.time() - start)
