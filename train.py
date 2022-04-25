@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from Model.ViViT_FE import ViViT_FE
+from Model.st_gcn import GGCN
 from Model.ViViT_Pose import ViViT_Pose
 from configuration import build_config
 from dataloader import TinyVirat, VIDEO_LENGTH, TUBELET_TIME, NUM_CLIPS, POSE_POINT_COUNT, POSE_POINT_SIZE
