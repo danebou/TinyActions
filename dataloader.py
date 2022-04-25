@@ -37,6 +37,14 @@ class ToFloatTensorInZeroOne(object):
     def __call__(self, vid):
         return to_normalized_float_tensor(vid)
 
+def pose_permute(pose):
+    return pose.permute(2, 0, 1)
+
+class PosePermute(object):
+    def __call__(self, pose):
+        return pose_permute(pose)
+
+
 def normalize(vid, mean, std):
     shape = (-1,) + (1,) * (vid.dim() - 1)
     mean = torch.as_tensor(mean).reshape(shape)
@@ -98,7 +106,14 @@ class TinyVirat(Dataset):
         self.normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.transform = transforms.Compose([ToFloatTensorInZeroOne(), self.resize, self.normalize])
 
-        self.pose_transform = transforms.Compose([ToFloatTensorInZeroOne(), self.resize, self.normalize])
+        self.pose_data_len = 56
+        self.pose_width_indices = [i*3 + 0 for i in range(17)] + [51, 53]
+        self.pose_height_indices = [i*3 + 1 for i in range(17)]  + [52, 54]
+
+        normalize_mean = [0.5] * 55 + [1.83]
+        normalize_std = [1] * 55 + [0.51]
+        pose_normalize = Normalize(mean=normalize_mean, std=normalize_std)
+        self.pose_transform = transforms.Compose([PosePermute(), pose_normalize])
         self.max_pose_objects = max_pose_objects
 
     def __len__(self):
@@ -140,11 +155,12 @@ class TinyVirat(Dataset):
     def load_all_pose_data(self, video_path, image_size, frame_count):
         pose_input = np.zeros((frame_count, self.max_pose_objects, (17 * 3 + 4 + 1)), dtype=np.float32) # 17 features * 3 per feature + 4 box + 1 score
 
-        with open('01788.json', 'r') as f:
+        with open('03727.json', 'r') as f:
             pose_json = json.load(f)
 
         if len(pose_json) == 0:
-            return pose_input
+            pose_tensor = torch.from_numpy(pose_input)
+            return pose_tensor
 
         pose_data = {}
         for p in pose_json:
@@ -164,18 +180,15 @@ class TinyVirat(Dataset):
                 pose_input[frame_id, pose_id, 55] = pose[pose_id]['score']
             pass
 
-        width_indices = [i*3 + 0 for i in range(17)] + [51, 53]
-        height_indices = [i*3 + 1 for i in range(17)]  + [52, 54]
-
         # Get normalization factor
         img_scale_norm = np.full((pose_input.shape[2]), 1.0, dtype=np.float32)
-        img_scale_norm[width_indices] = 1.0 / image_size[0]
-        img_scale_norm[height_indices] = 1.0 / image_size[1]
+        img_scale_norm[self.pose_width_indices] = 1.0 / image_size[0]
+        img_scale_norm[self.pose_height_indices] = 1.0 / image_size[1]
 
         # Normalize by Image Width and Flatten
         pose_tensor = torch.from_numpy(pose_input)
         pose_tensor *= torch.from_numpy(img_scale_norm)
-        pose_tensor = torch.reshape(pose_tensor, (frame_count, -1))
+
         return pose_tensor
 
     def load_all_frames(self, video_path):
@@ -227,7 +240,7 @@ class TinyVirat(Dataset):
             frames = frames[:len(frames) - (len(frames) % self.num_frames)]
             pose_data = pose_data[:len(frames) - (len(frames) % self.num_frames)]
         clips = torch.stack([self.transform(x) for x in chunks(frames, self.num_frames)])
-        pose_clips = torch.stack([self.transform(x) for x in chunks(pose_data, self.num_frames)])
+        pose_clips = torch.stack([self.pose_transform(x) for x in chunks(pose_data, self.num_frames)])
         return clips, pose_clips
 
     def __getitem__(self, index):
@@ -259,14 +272,14 @@ class TinyVirat(Dataset):
             rem_clips = torch.from_numpy(rem_clips)
             clips = torch.cat((clips,rem_clips),dim=0)
 
-            last_pose_clip = pose_clips[-1,:,:]
+            last_pose_clip = pose_clips[-1,:,:,:]
             last_pose_clip = last_pose_clip.cpu().detach().numpy()
-            rem_pose_clips = np.tile(last_pose_clip,(diff,1,1))
+            rem_pose_clips = np.tile(last_pose_clip,(diff,1,1,1))
             rem_pose_clips = torch.from_numpy(rem_pose_clips)
             pose_clips = torch.cat((pose_clips,rem_pose_clips),dim=0)
         elif clips.shape[0] > NUM_CLIPS:
             clips = clips[:NUM_CLIPS,:,:,:,:]
-            pose_clips = pose_clips[:NUM_CLIPS,:,:]
+            pose_clips = pose_clips[:NUM_CLIPS,:,:,:]
         return clips, pose_clips, label #clips: nc x ch x t x H x W
 
 if __name__ == '__main__':
@@ -283,7 +296,7 @@ if __name__ == '__main__':
     tublet_count = 0
     tublet_take = 0
     for epoch in range(0, 1):
-        for i, (clips, labels) in enumerate(tqdm(dataloader)):
+        for i, (clips, pose_inputs, labels) in enumerate(tqdm(dataloader)):
             clips = clips.data.numpy()
             labels = labels.data.numpy()
 

@@ -110,7 +110,7 @@ if __name__ == '__main__':
         loss = 0.
         accuracy = 0.
         cnt = 0.
-        for batch_idx, (inputs, targets) in enumerate(tqdm(training_generator)):
+        for batch_idx, (inputs, pose_inputs, targets) in enumerate(tqdm(training_generator)):
             inputs = inputs.to(device)
             #print("Targets shape : ",targets.shape)
             targets = targets.to(device)
@@ -150,7 +150,7 @@ if __name__ == '__main__':
         accuracy = 0.
         cnt = 0.
         with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(validation_generator):
+            for batch_idx, (inputs, pose_inputs, targets) in enumerate(validation_generator):
                 inputs = inputs.cuda()
                 targets = targets.cuda()
                 predictions = model(inputs.float())
