@@ -108,6 +108,8 @@ def compute_accuracy(pred,target,inf_th):
     #Compute equal labels
     return accuracy_score(pred,target)
 
+relevant_pred = [i for i in range(26) if i not in [5,10,11, 17, 22]]
+
 #TRAINING AND VALIDATING
 if __name__ == '__main__':
     for epoch in range(start_epoch, max_epochs):
@@ -115,6 +117,7 @@ if __name__ == '__main__':
         model.train()
         loss = 0.
         accuracy = 0.
+        rel_acc = 0
         cnt = 0.
         for batch_idx, (inputs, pose_inputs, targets) in enumerate(tqdm(training_generator)):
             inputs = inputs.to(device)
@@ -126,7 +129,7 @@ if __name__ == '__main__':
             # Ascent Step
             predictions = model(pose_inputs.float()); #targets = torch.tensor(targets,dtype=torch.long); predictions = torch.tensor(predictions,dtype=torch.long)
 
-            batch_loss = criterion(predictions, targets)
+            batch_loss = criterion(predictions[:, relevant_pred], targets[:, relevant_pred])
 
             # compute gradients of this batch.
             (batch_loss / gradient_accumulations).backward()
@@ -142,12 +145,15 @@ if __name__ == '__main__':
             with torch.no_grad():
                 loss += batch_loss.sum().item()
                 accuracy +=  compute_accuracy(predictions,targets,inf_threshold)
+                rel_acc += compute_accuracy(predictions[:, relevant_pred], targets[:, relevant_pred],inf_threshold)
             cnt += len(targets) #number of samples
             scheduler.step()
 
         loss /= cnt;
         accuracy /= (batch_idx+1)
+        rel_acc /= (batch_idx+1)
         print(f"Epoch: {epoch}, Train accuracy: {accuracy:6.2f} %, Train loss: {loss:8.5f}")
+        print(f"Epoch: {epoch}, Train rel accuracy: {rel_acc:6.2f}")
         scheduler.step()
 
         #Test
@@ -155,20 +161,25 @@ if __name__ == '__main__':
         loss = 0.
         accuracy = 0.
         cnt = 0.
+        rel_acc = 0
         with torch.no_grad():
             for batch_idx, (inputs, pose_inputs, targets) in enumerate(validation_generator):
                 inputs = inputs.to(device)
                 targets = targets.to(device)
                 predictions = model(pose_inputs.float())
-                loss += criterion(predictions, targets).sum().item()
+
+                loss += criterion(predictions[:, relevant_pred], targets[:, relevant_pred])
                 accuracy += compute_accuracy(predictions,targets,inf_threshold)
+                rel_acc += compute_relevant(predictions[:, relevant_pred], targets[:, relevant_pred],inf_threshold)
                 cnt += len(targets)
             loss /= cnt
             accuracy /= (batch_idx+1)
+            rel_acc /= (batch_idx+1)
 
         print(f"Epoch: {epoch}, Test accuracy:  {accuracy:6.2f} %, Test loss:  {loss:8.5f}")
+        print(f"Epoch: {epoch}, Test rel accuracy: {rel_acc:6.2f}")
 
-        score.append((loss, accuracy))
+        score.append((loss, accuracy, rel_acc))
         checkpoint_path = os.path.join(checkpoint_path_base, f'epoch_{epoch}.pt')
         torch.save({
                 'epoch': epoch,
