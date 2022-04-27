@@ -12,7 +12,7 @@ from sklearn.metrics import accuracy_score
 import re
 import os
 
-exp='2'
+exp='4'
 
 #Make exp dir
 exp_path = os.path.join('exps', f'exp_{exp}')
@@ -170,7 +170,7 @@ if __name__ == '__main__':
 
                 loss += criterion(predictions[:, relevant_pred], targets[:, relevant_pred])
                 accuracy += compute_accuracy(predictions,targets,inf_threshold)
-                rel_acc += compute_relevant(predictions[:, relevant_pred], targets[:, relevant_pred],inf_threshold)
+                rel_acc += compute_accuracy(predictions[:, relevant_pred], targets[:, relevant_pred],inf_threshold)
                 cnt += len(targets)
             loss /= cnt
             accuracy /= (batch_idx+1)
