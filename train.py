@@ -144,6 +144,9 @@ if __name__ == '__main__':
         print(f"Epoch: {epoch}, Train accuracy: {accuracy:6.2f} %, Train loss: {loss:8.5f}")
         scheduler.step()
 
+        train_acc = accuracy
+        train_loss = loss
+
         #Test
         model.eval()
         loss = 0.
@@ -162,7 +165,7 @@ if __name__ == '__main__':
 
         print(f"Epoch: {epoch}, Test accuracy:  {accuracy:6.2f} %, Test loss:  {loss:8.5f}")
 
-        score.append((loss, accuracy))
+        score.append((train_acc, train_loss, loss, accuracy))
         checkpoint_path = os.path.join(checkpoint_path_base, f'epoch_{epoch}.pt')
         torch.save({
                 'epoch': epoch,
