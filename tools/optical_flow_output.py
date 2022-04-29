@@ -1,0 +1,320 @@
+from re import L
+from turtle import shape
+import cv2 as cv
+import cv2
+import numpy as np
+from sklearn.cluster import DBSCAN
+import  pickle
+import matplotlib.pyplot as plt
+import random
+import json
+
+def weighted_avg_and_std(values, weights):
+    """
+    Return the weighted average and standard deviation.
+
+    values, weights -- Numpy ndarrays with the same shape.
+    """
+    average = np.average(values, weights=weights)
+    # Fast and numerically precise:
+    variance = np.average((values-average)**2, weights=weights)
+    return (average, np.sqrt(variance))
+
+def get_frame_blob(f):
+    blobs = np.arange(f.shape[0] * f.shape[1])
+    blobs = blobs.reshape(f.shape[:2])
+    kernal = [(-1, -1,), (-1, 0,), (-1, 1,), (0, -1,), (0, 1,), (1, -1,), (1, 0,), (1, 1,)]
+    f = cv.blur(f, (3,3))
+    kernal_connections = []
+    threshold = 10
+    for k in kernal:
+        shift = np.roll(f, k, (0, 1))
+        diff = np.square(f - shift)
+        dis = np.sum(diff, axis=2)
+        dis = np.clip(dis, 0, 255)
+        if k[0] == -1:
+            dis[-1, :] = threshold
+        elif k[0] == 1:
+            dis[0, :] = threshold
+
+        if k[1] == -1:
+            dis[:, -1] = threshold
+        elif k[1] == 1:
+            dis[:, 0] = threshold
+
+        kernal_connections.append(dis < threshold)
+
+    # cv.imshow("dis",  cv2.resize(dis, (512, 512)))
+    cv.imshow("f",  cv2.resize(f, (512, 512)))
+    cv.waitKey(1000)
+
+def get_slid_win_score(img, p_img, shift, ignore_center):
+    shift_p_img = np.roll(p_img.copy(), shift, (0, 1))
+    diff = diff_img(img, shift_p_img)
+
+    x_shift, y_shift = shift
+    if x_shift < 0:
+        diff[x_shift:, :] = 0
+    elif x_shift > 0:
+        diff[:x_shift, :] = 0
+
+    if y_shift < 0:
+        diff[:, y_shift:] = 0
+    elif x_shift > 0:
+        diff[:, :y_shift] = 0
+
+    diff = np.where(diff > 20, 1, 0)
+
+    # avg_x, std_x = weighted_avg_and_std(np.arange(img.shape[0]), np.sum(diff, axis=1))
+    # avg_y, std_y = weighted_avg_and_std(np.arange(img.shape[1]), np.sum(diff, axis=0))
+    # return std_x ** 2 + std_y ** 2
+
+
+    # w, h, _ = img.shape
+    # cir_pos = (w // 2, h // 2)
+    # cir_rad = min(w, h) * 3 // 8
+    # mask = np.full(diff.shape, 1)
+    # mask = cv2.circle(mask, cir_pos, cir_rad, (0,0,0), -1)
+    # diff = np.multiply(diff,mask)
+
+    total_pixels = img.shape[0] * img.shape[1] - abs(x_shift) * img.shape[1] - abs(y_shift) * img.shape[0] + abs(x_shift) * abs(y_shift)
+    score = np.sum(diff) / total_pixels
+
+    return score
+
+def shift_img(img, shift, zero=False):
+    shift_img = np.roll(img.copy(), shift, (0, 1))
+    x_shift, y_shift = shift
+    x_shift %= img.shape[0]
+    y_shift %= img.shape[1]
+
+    return shift_img
+
+
+def diff_img(img1, img2):
+    diff = np.array(img1, dtype=np.float32) - np.array(img2, dtype=np.float32)
+    sqr = np.square(diff)
+    dis = np.sum(sqr, axis=2)
+    return dis
+
+def uint8_clip(img):
+    img = np.clip(img, 0, 255)
+    img = img.astype(np.uint8)
+    return img
+
+def happy_mod(a, mod):
+    a = a % mod
+    if a < 0:
+        a += mod
+    return a
+
+def frame_diff_pos_mask(img1, img2, pos1, pos2):
+    diff = img2.astype(np.float32) - img1.astype(np.float32)
+    sx, sy = (pos2[0] - pos1[0], pos2[1] - pos1[1])
+
+    h, w, _ = img1.shape
+
+    x_end = happy_mod(pos2[0], w)
+    y_end = happy_mod(pos2[1], h)
+    x_start = happy_mod(pos1[0], w)
+    y_start = happy_mod(pos1[1], h)
+
+    sx_sign = np.sign(sx)
+    sy_sign = np.sign(sy)
+
+    if sx_sign > 0:
+        if x_end < x_start:
+            diff[0:x_end, :] = 0
+            diff[x_start:, :] = 0
+        else:
+            diff[x_start:x_end, : ] = 0
+    elif sx_sign < 0:
+        if x_end > x_start:
+            diff[0:x_start, :] = 0
+            diff[x_end:, :] = 0
+        else:
+            diff[x_end:x_start, : ] = 0
+
+    if sy_sign > 0:
+        if y_end < y_start:
+            diff[:, 0:y_end] = 0
+            diff[:, y_start:] = 0
+        else:
+            diff[:, y_start:y_end] = 0
+    elif sy_sign < 0:
+        if y_end > y_start:
+            diff[:, 0:y_start] = 0
+            diff[:, y_end:] = 0
+        else:
+            diff[:, y_end:y_start] = 0
+
+    return diff
+
+def save_optical_vid(frames):
+    jitter_value = []
+    jitter_pos = [(0,0) for _ in range(len(frames))]
+    pre_proccesed_frames = frames
+    p_f = None
+    p_stable_frame = None
+    w, h, _ = frames[0].shape
+    pos = (0,0)
+    for i in range(len(frames)):
+        break
+        f = np.array(frames[i].copy())
+        f_blur = cv.blur(f, (3, 3))
+        if p_stable_frame is None:
+            p_stable_frame = f_blur
+
+        base_kernal = [(0,0), (-1, -1,), (-1, 0,), (-1, 1,), (0, -1,), (0, 1,), (1, -1,), (1, 0,), (1, 1,), ]
+        scores = {}
+        kernal = base_kernal
+        last_pos = (0,0)
+        for _ in range(4):
+            for b_k in kernal:
+                k = (b_k[0] + last_pos[0], b_k[1] + last_pos[1])
+                if k in scores: continue
+                scores[k] = get_slid_win_score(p_stable_frame, f_blur, k, True)
+                #scores[k] = get_slid_win_score(cmp_1, cmp_2, k)
+            j = min(scores, key=scores.get)
+            if j == last_pos:
+                break
+            last_pos = j
+        p_stable_frame = f_blur.copy()
+
+        pos = (pos[0] + last_pos[0], pos[1] + last_pos[1])
+        jitter_pos.append(pos)
+
+        f_stable = shift_img(f_blur, pos, True)
+        pre_proccesed_frames.append(f_stable)
+
+    final_frames = []
+    for i in range(len(frames)):
+        # jitter = np.average(diff_img(cmp_1, cmp_2))
+        # jitter_value.append(jitter)
+        # jitter_pos.append((last_pos[0] ** 2 + last_pos[1] ** 2) * 20)
+
+        # [0.5, 1.0, 0.5]
+        # -     [0.5, 1.0, 0.5] =
+        #kernel = [1, 2, -2, -1]
+        kernel = [1, 1, -1, -1]
+        tmp_frame = np.zeros(pre_proccesed_frames[0].shape, np.float32)
+        kernel_sum = 0
+        kernel_indices = []
+        for j in range(len(kernel)):
+            index = j - 1 + i
+            if index < 0:
+                index = 0
+            elif index >= len(frames):
+                index = len(frames) -1
+
+            kernel_indices.append(index)
+            k_v = kernel[j]
+            tmp_frame += pre_proccesed_frames[index] * k_v
+            kernel_sum += k_v
+        kp0, kp1, kp2, kp3 = kernel_indices
+        tmp_frame = (frame_diff_pos_mask(pre_proccesed_frames[kp3], pre_proccesed_frames[kp0], jitter_pos[kp3], jitter_pos[kp0]) +
+            frame_diff_pos_mask(pre_proccesed_frames[kp2], pre_proccesed_frames[kp1], jitter_pos[kp2], jitter_pos[kp1]))
+
+        tmp_frame /= 2
+        tmp_frame = np.clip(tmp_frame, 0, 255)
+        #tmp_frame = tmp_frame.astype(np.uint8)
+
+        #cv.imshow("ssadff",  cv2.resize(tmp_frame, (512, 512), cv.INTER_CUBIC))
+
+        if p_f is None:
+            p_f = pre_proccesed_frames[i]
+
+        # kernel1 = np.array([[-1, 0, 1],
+        #             [-2, 0, 2],
+        #             [-1, 0, 1]])
+        # identity = cv2.filter2D(src=tmp_frame, ddepth=-1, kernel=kernel1)
+
+        # f_p = np.array(frames[i+1])
+        # f_p = cv.blur(cv.blur(f_blur, (3, 3)), (3, 3))
+        #diff = tmp_frame.astype(np.float32) - p_f
+        # diff = tmp_frame.astype(np.float32)
+        # diff = np.square(diff)
+        # dis = np.sum(diff, axis=2)
+        dis = tmp_frame
+        dis = np.square(dis)
+        dis = np.sum(dis, axis=2)
+        dis = np.sqrt(dis)
+        dis = dis * 2
+        #dis += 127
+        dis = np.clip(dis, 0, 255)
+        dis = dis.astype(np.uint8)
+
+        hsv = np.zeros_like(frames[i])
+        hsv[..., 1] = 255
+
+
+        flow = cv.calcOpticalFlowFarneback(cv.cvtColor(pre_proccesed_frames[i], cv.COLOR_BGR2GRAY), cv.cvtColor(p_f, cv.COLOR_BGR2GRAY), None, 0.5, 3,winsize=5, iterations=3, poly_n=5, poly_sigma=1.05, flags=0)
+        mag, ang = cv.cartToPolar(flow[..., 0], flow[..., 1])
+        hsv[..., 0] = ang*180/np.pi/2
+        hsv[..., 2] = dis #cv.normalize(mag, None, 0, 255, cv.NORM_MINMAX)
+        bgr = cv.cvtColor(hsv, cv.COLOR_HSV2BGR)
+        #bgr = shift_img(bgr, (-jitter_pos[i][0], -jitter_pos[i][1]))c
+        #cv.imshow("this",  cv2.resize(bgr, (512, 512), cv.INTER_CUBIC))
+        # flow = cv.calcOpticalFlowFarneback(cv.cvtColor(tmp_frame, cv.COLOR_BGR2GRAY), cv.cvtColor(p_f, cv.COLOR_BGR2GRAY), None, 0.5, 3,winsize=3, iterations=3, poly_n=3, poly_sigma=1.05, flags=0)
+        # mag, ang = cv.cartToPolar(flow[..., 0], flow[..., 1])
+        # hsv = hsv.copy()
+        # hsv[..., 0] = ang*180/np.pi/2
+        # hsv[..., 2] = mag # cv.normalize(dis, None, 0, 255, cv.NORM_MINMAX)
+        # bgr = cv.cvtColor(hsv, cv.COLOR_HSV2BGR)
+        # cv.imshow("fdfddffdfd",  cv2.resize(bgr, (512, 512), cv.INTER_CUBIC))
+
+        # edges = cv2.Canny(image=f, threshold1=50, threshold2=300)
+
+        # cv.imshow("s",  cv2.resize(edges, (512, 512), cv.INTER_CUBIC))
+        #cv.imshow("f",  cv2.resize(shift_img(dis, (-jitter_pos[i][0], -jitter_pos[i][1])), (512, 512), cv.INTER_CUBIC))
+        # cv.imshow("a",  cv2.resize(tmp_frame, (512, 512), cv.INTER_CUBIC))
+        #cv.imshow("s",  cv2.resize(shift_img(frames[i], jitter_pos[i]), (512, 512), cv.INTER_CUBIC))
+
+        #cv.waitKey(50)
+        final_frames.append(bgr)
+        p_f = pre_proccesed_frames[i]
+
+    return final_frames
+
+
+
+
+def load_video(filename):
+    cap = cv.VideoCapture(filename)
+    frames = []
+    i = 0
+    while(cap.isOpened()):
+        #if i >= 1: break
+        ret, frame = cap.read()
+        if not ret: break
+        frames.append(frame)
+        i += 1
+    cap.release()
+    return frames
+
+import os
+
+virat_folder = 'TinyVIRAT-v2\\videos\\'
+virat_files = [(f, os.path.join(dp, f)) for dp, dn, fn in os.walk(os.path.expanduser(virat_folder)) for f in fn]
+
+file_count = len(virat_files)
+
+from tqdm import tqdm
+
+for i, (file_name, file_path) in tqdm(enumerate(virat_files)):
+    if not file_name.endswith(".mp4"): continue
+    file_rel_path = file_path.replace(virat_folder, "")
+    target_file = f'optical_flow\\{file_rel_path}'
+    target_dir = target_file.replace(file_name, "")
+    target_file = target_file.replace('.mp4', '.avi')
+    print(f'File {i}/{file_count} {target_file}')
+    if os.path.isfile(target_file): continue
+    os.makedirs(target_dir, exist_ok=True)
+
+    frames = load_video(file_path)
+    optical_frames = save_optical_vid(frames)
+
+    out = cv2.VideoWriter(target_file,cv2.VideoWriter_fourcc('M','J','P','G'), 30, (frames[0].shape[0],frames[0].shape[1]))
+    for f in optical_frames:
+        out.write(f)
+    out.release()
